@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{049CB965-62A0-44A3-B211-BCD0134FE838}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Sdk", "src\UniSearch.Sdk\UniSearch.Sdk.csproj", "{EA67358F-E786-4602-8ABE-8FF302F5834C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Core", "src\UniSearch.Core\UniSearch.Core.csproj", "{59403632-FEAE-46DB-B38B-7BB393C3A759}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Providers.Everything", "src\UniSearch.Providers.Everything\UniSearch.Providers.Everything.csproj", "{A527F0CA-4895-40D6-8184-3264A0B582CE}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{6DD5CD91-9EB6-4DCD-B438-69372AA4D59B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Core.Tests", "tests\UniSearch.Core.Tests\UniSearch.Core.Tests.csproj", "{BB6513F5-2ED9-41D8-9EF3-3E8893637559}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Host", "src\UniSearch.Host\UniSearch.Host.csproj", "{CEC70A90-130F-4DEC-8832-9E7A514548DA}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EA67358F-E786-4602-8ABE-8FF302F5834C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA67358F-E786-4602-8ABE-8FF302F5834C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA67358F-E786-4602-8ABE-8FF302F5834C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA67358F-E786-4602-8ABE-8FF302F5834C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{59403632-FEAE-46DB-B38B-7BB393C3A759}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{59403632-FEAE-46DB-B38B-7BB393C3A759}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{59403632-FEAE-46DB-B38B-7BB393C3A759}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{59403632-FEAE-46DB-B38B-7BB393C3A759}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A527F0CA-4895-40D6-8184-3264A0B582CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A527F0CA-4895-40D6-8184-3264A0B582CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A527F0CA-4895-40D6-8184-3264A0B582CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A527F0CA-4895-40D6-8184-3264A0B582CE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BB6513F5-2ED9-41D8-9EF3-3E8893637559}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BB6513F5-2ED9-41D8-9EF3-3E8893637559}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BB6513F5-2ED9-41D8-9EF3-3E8893637559}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BB6513F5-2ED9-41D8-9EF3-3E8893637559}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CEC70A90-130F-4DEC-8832-9E7A514548DA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CEC70A90-130F-4DEC-8832-9E7A514548DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CEC70A90-130F-4DEC-8832-9E7A514548DA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CEC70A90-130F-4DEC-8832-9E7A514548DA}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EA67358F-E786-4602-8ABE-8FF302F5834C} = {049CB965-62A0-44A3-B211-BCD0134FE838}
+		{59403632-FEAE-46DB-B38B-7BB393C3A759} = {049CB965-62A0-44A3-B211-BCD0134FE838}
+		{A527F0CA-4895-40D6-8184-3264A0B582CE} = {049CB965-62A0-44A3-B211-BCD0134FE838}
+		{BB6513F5-2ED9-41D8-9EF3-3E8893637559} = {6DD5CD91-9EB6-4DCD-B438-69372AA4D59B}
+		{CEC70A90-130F-4DEC-8832-9E7A514548DA} = {049CB965-62A0-44A3-B211-BCD0134FE838}
+	EndGlobalSection
+EndGlobal

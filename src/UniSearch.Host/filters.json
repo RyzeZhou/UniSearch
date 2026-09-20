@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "comment": "UniSearch 筛选器定义。这是程序自带的一份模板，改它会在下次更新程序时被覆盖 —— 你自己的筛选器请写进 %LOCALAPPDATA%\\UniSearch\\filters.json（同名 id 会覆盖这里的）。字段说明：id 稳定标识（小写）；name 标签上显示的名字；glyph 可选图标码点（Segoe Fluent Icons）；extensions 扩展名（不带点，大小写都行）；kinds 结果类型（File/Folder/Image/Video/Audio/ArchiveEntry/CodeSymbol/Application/BibliographicItem/Note/WebPage…）；namePattern 文件名正则（可选）；providers 限定只在这些后端下出现（留空=所有后端）；order 排序（内置分类占 0-900，默认 500）；hidden 为 true 时不在标签栏显示。匹配是并集：扩展名命中、类型命中、正则命中，任一成立就算属于该筛选器。",
+  "filters": [
+    {
+      "id": "bioinformatics",
+      "name": "生信相关",
+      "order": 500,
+      "description": "结构 / 序列 / 比对 / 注释类文件（pdb、cif、fasta、sam、vcf、gff…）",
+      "extensions": [
+        "pdb", "ent", "cif", "mmcif", "pdbx", "pdbqt", "mol2", "mol", "sdf", "xyz", "pse", "pymol",
+        "fasta", "fa", "fna", "faa", "ffn", "frn", "fastq", "fq",
+        "sam", "bam", "cram", "vcf", "bcf", "gff", "gff3", "gtf", "bed", "wig", "bigwig",
+        "gb", "gbk", "genbank", "embl", "hmm", "newick", "nwk", "phy", "phylip", "aln", "msa", "stockholm",
+        "nxs", "nexus", "ab1", "sra"
+      ]
+    },
+    {
+      "id": "cad3d",
+      "name": "3D/CAD",
+      "order": 510,
+      "description": "建模与打印类文件",
+      "extensions": [
+        "stl", "obj", "3mf", "step", "stp", "iges", "igs", "dwg", "dxf",
+        "fbx", "blend", "gltf", "glb", "ply", "dae", "skp", "f3d", "scad"
+      ]
+    },
+    {
+      "id": "notebooks",
+      "name": "笔记本",
+      "order": 520,
+      "description": "交互式笔记本与可复现报告",
+      "extensions": ["ipynb", "rmd", "qmd", "nb", "wl", "cdf"]
+    },
+    {
+      "id": "configs",
+      "name": "配置",
+      "order": 530,
+      "description": "配置文件（json/yaml/toml/ini/env…）",
+      "extensions": [
+        "json", "jsonc", "json5", "yaml", "yml", "toml", "ini", "cfg", "conf", "config",
+        "env", "properties", "editorconfig", "lock", "plist", "xml"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>UniSearch.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\UniSearch.Sdk\UniSearch.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\UniSearch.Core\UniSearch.Core.csproj" />
+    <ProjectReference Include="..\..\src\UniSearch.Providers.Everything\UniSearch.Providers.Everything.csproj" />
+  </ItemGroup>
+</Project>

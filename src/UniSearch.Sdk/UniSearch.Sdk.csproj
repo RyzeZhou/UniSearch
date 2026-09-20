@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>UniSearch.Sdk</RootNamespace>
+    <Description>UniSearch Provider SDK — 搜索后端扩展契约。稳定 API，零第三方依赖。</Description>
+  </PropertyGroup>
+</Project>

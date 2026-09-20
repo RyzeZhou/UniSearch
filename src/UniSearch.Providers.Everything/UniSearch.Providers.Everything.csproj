@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>UniSearch.Providers.Everything</RootNamespace>
+    <Description>第一方 Provider：Everything 文件系统索引。查询走纯托管 IPC 客户端。</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UniSearch.Sdk\UniSearch.Sdk.csproj" />
+    <PackageReference Include="EverythingSearchClient" />
+  </ItemGroup>
+</Project>

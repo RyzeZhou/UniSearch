@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>UniSearch.Core</RootNamespace>
+    <Description>UniSearch 核心：上下文调度、Provider 聚合、实体融合、分类与排序。纯托管、可单测、不依赖 UI。</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UniSearch.Sdk\UniSearch.Sdk.csproj" />
+  </ItemGroup>
+</Project>

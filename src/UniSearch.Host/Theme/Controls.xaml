@@ -1,0 +1,368 @@
+<!-- UniSearch 可复用控件模板：详细列表的单元格与列头、来源栏项、分类标签、搜索框。
+     布局密度与美术数值见 Theme/Tokens.xaml 与 docs/spec/UI-SPEC.md。
+
+     结果表是"Everything / 资源管理器详细信息"口径：一列一个 DataTemplate，
+     GridViewColumn 由 MainWindow.xaml.cs 按用户配置（可见列 + 顺序 + 宽度）动态装配。
+
+     命中高亮：MVP 阶段以单段高亮（首个 [[区间]]）渲染为 RichText 级加粗，
+     多段命中退化为普通标题。完整区间高亮在 M3 再做（见 UI-SPEC §6）。 -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="clr-namespace:UniSearch.Host.ViewModels"
+    xmlns:conv="clr-namespace:UniSearch.Host.Converters">
+
+    <!-- 转换器必须声明在本字典内、且在用到它的模板之前。
+         放在 App.xaml 的 MergedDictionaries 之后会炸：合并本字典时就要解析模板里的
+         StaticResource，那时 App 层资源尚未注册（实测崩溃 "无法找到名为 BoolToVis 的资源"）。 -->
+    <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+    <conv:BrushByKeyConverter x:Key="BrushByKey" />
+    <conv:BoolToFontWeightConverter x:Key="BoldWhenTrue" />
+
+    <!-- ── 列头 ─────────────────────────────────────────
+         必须自带 PART_HeaderGripper：GridView 的"拖列头调宽"全靠模板里这个 Thumb，
+         自定义模板时漏掉它，列宽就再也拖不动了（而且没有任何报错）。 -->
+    <Style x:Key="ColumnHeaderStyle" TargetType="GridViewColumnHeader">
+        <Setter Property="Height" Value="{StaticResource Details.Header.Height}"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="FontFamily" Value="{StaticResource Font.Text}"/>
+        <Setter Property="FontSize" Value="{StaticResource Font.Size.ColumnHeader}"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text.Secondary}"/>
+        <Setter Property="ContentTemplate">
+            <Setter.Value>
+                <DataTemplate DataType="{x:Type vm:ResultColumnViewModel}">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="{Binding HeaderAlign}"
+                                ToolTip="{Binding Tooltip}">
+                        <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
+                                   FontSize="{StaticResource Font.Size.ColumnHeader}"
+                                   FontWeight="{Binding IsSorted, Converter={StaticResource BoldWhenTrue}}"/>
+                        <TextBlock Text="{Binding SortGlyph}" Margin="4,0,0,0" VerticalAlignment="Center"
+                                   FontSize="9" Foreground="{StaticResource Brush.Accent}"/>
+                    </StackPanel>
+                </DataTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="GridViewColumnHeader">
+                    <Grid>
+                        <Border x:Name="Bd" Background="Transparent"
+                                BorderBrush="{StaticResource Brush.Stroke.Default}" BorderThickness="0,0,1,1"
+                                Padding="{StaticResource Cell.Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <!-- 拖拽热区：10px 宽是"够得着"的下限。原来是 7px 且整块 Opacity=0 ——
+                             用户实测反馈"列拖不动"：链路其实是通的（探针能拖动），只是根本看不见边界在哪。
+                             hover 时露出 2px 强调色竖线当把手。 -->
+                        <Thumb x:Name="PART_HeaderGripper" HorizontalAlignment="Right" Width="10"
+                               Cursor="SizeWE" Background="Transparent">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="Thumb">
+                                    <Grid Background="Transparent" Width="10">
+                                        <Border x:Name="Grip" Width="2" HorizontalAlignment="Right"
+                                                Background="{StaticResource Brush.Accent}" Opacity="0"/>
+                                    </Grid>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Grip" Property="Opacity" Value="0.75"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ── 结果行容器：24px 行高、整行可选中、右键出 shell 菜单 ───────── -->
+    <Style x:Key="ResultRowStyle" TargetType="ListViewItem">
+        <Setter Property="Height" Value="{StaticResource Details.Row.Height}"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="FontFamily" Value="{StaticResource Font.Text}"/>
+        <Setter Property="FontSize" Value="{StaticResource Font.Size.ResultRow}"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
+        <!-- 右键菜单：通用动作由宿主统一注入（Provider 只声明领域动作）。
+             ContextMenu 有自己的可视树、绑不到 Window，所以先用 Tag 把会话 VM 带下来，
+             菜单再经 PlacementTarget.Tag 取回它。 -->
+        <Setter Property="Tag" Value="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}"/>
+        <Setter Property="ContextMenu">
+            <Setter.Value>
+                <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                    <!-- 打开：文件和文件夹分开。文件夹自己就能被打开，
+                         所以它只给「打开此文件夹」，不给「打开」+「打开所在目录」（那两项对文件夹是重复语义）。 -->
+                    <MenuItem Header="打开(_O)" Command="{Binding OpenSelectedCommand}" InputGestureText="Enter"
+                              Visibility="{Binding IsFileSelection, Converter={StaticResource BoolToVis}}"/>
+                    <MenuItem Header="打开此文件夹(_O)" Command="{Binding OpenSelectedCommand}" InputGestureText="Enter"
+                              Visibility="{Binding IsFolderSelection, Converter={StaticResource BoolToVis}}"/>
+                    <MenuItem Header="打开所在目录(_F)" Command="{Binding RevealSelectedCommand}" InputGestureText="Shift+Enter"
+                              Visibility="{Binding IsFileSelection, Converter={StaticResource BoolToVis}}"/>
+                    <Separator/>
+                    <!-- 提权只对可执行文件有意义，对 .txt 弹 UAC 是噪声 -->
+                    <MenuItem Header="以管理员身份运行(_A)" Command="{Binding RunAsAdminSelectedCommand}"
+                              InputGestureText="Ctrl+Enter"
+                              Visibility="{Binding IsRunnableSelection, Converter={StaticResource BoolToVis}}"/>
+                    <MenuItem Header="在终端中打开(_T)" Command="{Binding OpenInConsoleSelectedCommand}"
+                              InputGestureText="Ctrl+Shift+Enter"/>
+                    <Separator/>
+                    <MenuItem Header="复制路径(_C)" Command="{Binding CopyPathCommand}" InputGestureText="Ctrl+C"/>
+                    <MenuItem Header="复制文件名(_N)" Command="{Binding CopyNameCommand}" InputGestureText="Ctrl+Shift+C"/>
+                    <Separator/>
+                    <!-- 后端领域动作：选中项的后端没声明就整块隐藏。
+                         分隔线必须跟着一起藏，否则会和后面的分隔线连成两条。 -->
+                    <Separator Visibility="{Binding HasProviderActions, Converter={StaticResource BoolToVis}}"/>
+                    <MenuItem Header="后端动作" ItemsSource="{Binding ProviderActions}"
+                              Visibility="{Binding HasProviderActions, Converter={StaticResource BoolToVis}}">
+                        <MenuItem.ItemContainerStyle>
+                            <Style TargetType="MenuItem">
+                                <Setter Property="Header" Value="{Binding Label}"/>
+                                <Setter Property="Command"
+                                        Value="{Binding DataContext.InvokeProviderActionCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <Setter Property="CommandParameter" Value="{Binding}"/>
+                            </Style>
+                        </MenuItem.ItemContainerStyle>
+                    </MenuItem>
+                    <Separator/>
+                    <MenuItem Header="属性(_R)" Command="{Binding ShowPropertiesSelectedCommand}" InputGestureText="Alt+Enter"/>
+                </ContextMenu>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListViewItem">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{StaticResource Radius.Default}"
+                            SnapsToDevicePixels="True">
+                        <GridViewRowPresenter
+                            Columns="{Binding View.Columns, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            Content="{TemplateBinding Content}"
+                            VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Selection}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ── 单元格模板：一列一个，Key 与 ColumnCatalog 的列 key 对应 ─────
+         取值全在映射阶段算好（见 SnapshotMapper），模板里不做格式化。
+
+         ⚠ 这里的 FontSize 是**显式**写的，不是多余：WPF-UI 4.0.3 的 ControlsDictionary 带了一个
+         隐式 TextBlock 样式并设了 FontSize=14，而"样式 setter"优先级高于"属性继承" ——
+         只靠继承会被画成 14 DIP（=10.5pt，比资源管理器的 9pt 还大）。
+         App.xaml 里已经用一份"不设 FontSize"的隐式样式盖掉了它（见那里的长注释），
+         但单元格这里仍然显式写出真实意图：结果行 = ResultRow、列头 = ColumnHeader。
+         2026-09-20 实测踩到：整个结果表一直按 14 DIP 渲染，前几轮调 Font.Size.ResultRow 全都没生效。 -->
+
+    <!-- 名称：图标 + 高亮标题 -->
+    <DataTemplate x:Key="Cell.name" DataType="{x:Type vm:ResultItemViewModel}">
+        <Grid Margin="{StaticResource Cell.Padding}" ToolTip="{Binding ToolTipText, Mode=OneWay}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="18"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0" Width="16" Height="16" VerticalAlignment="Center">
+                <Image Source="{Binding ThumbnailPath, Mode=OneWay}" Stretch="Uniform"
+                       Visibility="{Binding HasThumbnail, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+                <!-- Shell 真图标：文件类型全靠它区分（字体图标在 Win10 上缺字形） -->
+                <Image Source="{Binding Icon, Mode=OneWay}" Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       Visibility="{Binding HasIcon, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+                <TextBlock Text="{Binding Glyph, Mode=OneWay}" Foreground="{StaticResource Brush.Text.Secondary}"
+                           FontFamily="{StaticResource Glyph.Font}" FontSize="11"
+                           Visibility="{Binding UsesGlyph, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+            </Grid>
+            <TextBlock Grid.Column="1" Margin="4,0,0,0" VerticalAlignment="Center"
+                       FontSize="{StaticResource Font.Size.ResultRow}"
+                       TextTrimming="CharacterEllipsis">
+                <Run Text="{Binding TitlePrefix, Mode=OneWay}"/>
+                <Run Text="{Binding TitleHighlight, Mode=OneWay}" FontWeight="Bold"
+                     Foreground="{StaticResource Brush.Accent}"/>
+                <Run Text="{Binding TitleSuffix, Mode=OneWay}"/>
+            </TextBlock>
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="Cell.path" DataType="{x:Type vm:ResultItemViewModel}">
+        <TextBlock Margin="{StaticResource Cell.Padding}" VerticalAlignment="Center"
+                   FontSize="{StaticResource Font.Size.ResultRow}"
+                   Text="{Binding FullPath, Mode=OneWay}" TextTrimming="CharacterEllipsis"
+                   Foreground="{StaticResource Brush.Text.Secondary}"
+                   ToolTip="{Binding FullPath, Mode=OneWay}"/>
+    </DataTemplate>
+
+    <DataTemplate x:Key="Cell.extension" DataType="{x:Type vm:ResultItemViewModel}">
+        <TextBlock Margin="{StaticResource Cell.Padding}" VerticalAlignment="Center"
+                   FontSize="{StaticResource Font.Size.ResultRow}"
+                   Text="{Binding ExtensionLabel, Mode=OneWay}" TextTrimming="CharacterEllipsis"
+                   Foreground="{StaticResource Brush.Text.Tertiary}"/>
+    </DataTemplate>
+
+    <DataTemplate x:Key="Cell.size" DataType="{x:Type vm:ResultItemViewModel}">
+        <TextBlock Margin="{StaticResource Cell.Padding}" VerticalAlignment="Center"
+                   FontSize="{StaticResource Font.Size.ResultRow}"
+                   HorizontalAlignment="Right" Text="{Binding SizeText, Mode=OneWay}"
+                   Foreground="{StaticResource Brush.Text.Secondary}"/>
+    </DataTemplate>
+
+    <DataTemplate x:Key="Cell.modified" DataType="{x:Type vm:ResultItemViewModel}">
+        <TextBlock Margin="{StaticResource Cell.Padding}" VerticalAlignment="Center"
+                   FontSize="{StaticResource Font.Size.ResultRow}"
+                   Text="{Binding ModifiedText, Mode=OneWay}"
+                   Foreground="{StaticResource Brush.Text.Secondary}"/>
+    </DataTemplate>
+
+    <DataTemplate x:Key="Cell.kind" DataType="{x:Type vm:ResultItemViewModel}">
+        <TextBlock Margin="{StaticResource Cell.Padding}" VerticalAlignment="Center"
+                   FontSize="{StaticResource Font.Size.ResultRow}"
+                   Text="{Binding KindName, Mode=OneWay}" TextTrimming="CharacterEllipsis"
+                   Foreground="{StaticResource Brush.Text.Secondary}"/>
+    </DataTemplate>
+
+    <DataTemplate x:Key="Cell.provider" DataType="{x:Type vm:ResultItemViewModel}">
+        <TextBlock Margin="{StaticResource Cell.Padding}" VerticalAlignment="Center"
+                   FontSize="{StaticResource Font.Size.ResultRow}"
+                   Text="{Binding ProviderLabel, Mode=OneWay}" TextTrimming="CharacterEllipsis"
+                   Foreground="{StaticResource Brush.Text.Secondary}"/>
+    </DataTemplate>
+
+    <!-- ── 来源栏紧凑形态（左栏"小"）──────────────────
+         只放后端图标 + 下面一行数量。宽度只有 56px，所以：
+         · 名称、状态、默认标记全部收起来（放不下，硬塞只会截成半个字）；
+         · 数量超过 9999 时显示 ">9999"（五位数在这个宽度里会被截断，反而看不出量级）。 -->
+    <DataTemplate x:Key="SourceCompactTemplate" DataType="{x:Type vm:SourceViewModel}">
+        <Button Style="{x:Null}" Background="Transparent" BorderThickness="0" Padding="0"
+                HorizontalContentAlignment="Center" Cursor="Hand" Focusable="False"
+                ToolTip="{Binding TooltipText}"
+                Command="{Binding DataContext.SelectSourceCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                CommandParameter="{Binding Id}">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" CornerRadius="{StaticResource Radius.Default}"
+                            Background="Transparent" Padding="4,5" Margin="4,1">
+                        <ContentPresenter HorizontalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Selection}"/>
+                        </DataTrigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+            <StackPanel HorizontalAlignment="Center">
+                <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource Glyph.Font}" FontSize="16"
+                           HorizontalAlignment="Center"
+                           Foreground="{StaticResource Brush.Text.Secondary}"/>
+                <TextBlock Text="{Binding CompactCount}" FontSize="{StaticResource Font.Size.Chip}"
+                           HorizontalAlignment="Center" Margin="0,1,0,0"
+                           Foreground="{StaticResource Brush.Text.Tertiary}"/>
+            </StackPanel>
+        </Button>
+    </DataTemplate>
+
+    <!-- ── 来源栏项（左栏）────────────────────────────
+         点击 = 本次只搜它；再点一次 = 回到设置里的默认集合。 -->
+    <DataTemplate x:Key="SourceItemTemplate" DataType="{x:Type vm:SourceViewModel}">
+        <Button Style="{x:Null}" Background="Transparent" BorderThickness="0" Padding="0"
+                HorizontalContentAlignment="Stretch" Cursor="Hand" Focusable="False"
+                ToolTip="{Binding TooltipText}"
+                Command="{Binding DataContext.SelectSourceCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                CommandParameter="{Binding Id}">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" CornerRadius="{StaticResource Radius.Default}"
+                            Background="Transparent" Padding="8,5">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Selection}"/>
+                        </DataTrigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Glyph}" FontFamily="{StaticResource Glyph.Font}"
+                           FontSize="12" VerticalAlignment="Center"
+                           Foreground="{StaticResource Brush.Text.Secondary}"/>
+                <StackPanel Grid.Column="1" Margin="4,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
+                               Foreground="{StaticResource Brush.Text.Primary}"
+                               FontSize="{StaticResource Font.Size.Primary}"/>
+                    <TextBlock Text="{Binding StatusText}" TextTrimming="CharacterEllipsis"
+                               FontSize="{StaticResource Font.Size.Chip}"
+                               Foreground="{StaticResource Brush.Text.Tertiary}"/>
+                </StackPanel>
+                <!-- "默认"标记：它在设置里的"随输入自动搜索"集合里 -->
+                <Border Grid.Column="2" VerticalAlignment="Center" Padding="4,1"
+                        CornerRadius="{StaticResource Radius.Chip}"
+                        Background="{StaticResource Brush.Chip.Neutral}"
+                        Visibility="{Binding IsDefaultAuto, Converter={StaticResource BoolToVis}}"
+                        ToolTip="属于设置里的默认来源集合（每次输入都会自动搜它）">
+                    <TextBlock Text="默认" FontSize="{StaticResource Font.Size.Chip}"
+                               Foreground="{StaticResource Brush.Text.Tertiary}"/>
+                </Border>
+            </Grid>
+        </Button>
+    </DataTemplate>
+
+    <!-- ── 分类标签（筛选行） ───────────────────────
+         Style="{x:Null}" 是必须的：WPF-UI 的隐式 RadioButton 样式带一大圈内边距/最小宽度，
+         七个标签就会被撑到放不下（实测：出现横向滚动条，"代码(50)"被藏在右边）。
+         这里的外观完全由下面的模板决定。 -->
+    <DataTemplate x:Key="CategoryTabTemplate" DataType="{x:Type vm:CategoryTab}">
+        <RadioButton Style="{x:Null}" GroupName="CategoryTabs" IsChecked="{Binding IsSelectedTab, Mode=TwoWay}"
+                     Content="{Binding Label}"
+                     Margin="0,0,2,1" Padding="6,1" Cursor="Hand" MinWidth="0"
+                     ToolTip="{Binding TooltipText}"
+                     Command="{Binding DataContext.SelectTabCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                     CommandParameter="{Binding Id}"
+                     FontFamily="{StaticResource Font.Text}" FontSize="{StaticResource Font.Size.FilterTab}"
+                     Foreground="{StaticResource Brush.Text.Primary}">
+            <RadioButton.Template>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Tb" CornerRadius="{StaticResource Radius.Default}" Background="Transparent"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter VerticalAlignment="Center" Content="{TemplateBinding Content}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Tb" Property="Background" Value="{StaticResource Brush.Selection}"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Tb" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </RadioButton.Template>
+        </RadioButton>
+    </DataTemplate>
+
+</ResourceDictionary>

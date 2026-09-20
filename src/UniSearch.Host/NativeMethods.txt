@@ -1,0 +1,12 @@
+// CsWin32 生成清单：只声明本项目实际用到的互操作，避免生成整棵 SDK。
+// 用途见 UniSearch.Host/Services/ExplorerLocator.cs（取前台 Explorer 的当前目录）。
+
+// ── 前台窗口与进程归属 ─────────────────────────────
+GetForegroundWindow
+GetWindowThreadProcessId
+
+// ── Shell 窗口枚举（Explorer 当前目录） ───────────────
+IShellWindows
+ShellWindows
+IWebBrowser2
+SHGetPathFromIDList

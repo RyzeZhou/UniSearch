@@ -1,0 +1,139 @@
+<!-- UniSearch 设计令牌：Win11 美术 + Win10 密度。
+     数值来源 docs/spec/UI-SPEC.md §2，改动必须同步文档。 -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- ── 尺寸 ─────────────────────────────────────────── -->
+    <sys:Double x:Key="Row.Height">30</sys:Double>
+    <sys:Double x:Key="Row.Height.Compact">26</sys:Double>
+    <sys:Double x:Key="Row.Height.Double">44</sys:Double>
+    <sys:Double x:Key="Header.Height">24</sys:Double>
+    <sys:Double x:Key="Tab.Height">28</sys:Double>
+    <sys:Double x:Key="SearchBox.Height">36</sys:Double>
+    <sys:Double x:Key="Status.Height">22</sys:Double>
+    <sys:Double x:Key="Icon.Size">16</sys:Double>
+    <sys:Double x:Key="Chip.Height">16</sys:Double>
+    <GridLength x:Key="Row.Icon.ColumnWidth">24</GridLength>
+    <GridLength x:Key="Row.Meta.ColumnWidth">Auto</GridLength>
+
+    <!-- 详细列表（Everything 口径）：行更矮、列头更薄，一屏塞得下更多行 -->
+    <sys:Double x:Key="Details.Row.Height">20</sys:Double>
+    <sys:Double x:Key="Details.Header.Height">22</sys:Double>
+    <sys:Double x:Key="Details.Icon.Size">16</sys:Double>
+    <sys:Double x:Key="SideBar.MinWidth">132</sys:Double>
+    <GridLength x:Key="SideBar.Width">188</GridLength>
+    <!-- 左栏紧凑形态：只放"后端图标 + 一行数量"，56 是放得下 ">9999" 的宽度 -->
+    <GridLength x:Key="SideBar.CompactWidth">56</GridLength>
+    <!-- 右栏收起后留下的"把手"条宽 -->
+    <GridLength x:Key="Preview.RailWidth">22</GridLength>
+    <sys:Double x:Key="Preview.MinWidth">220</sys:Double>
+    <!-- 注意：ColumnDefinition.Width 要的是 GridLength，不是 Double ——
+         写成 sys:Double 会在加载 XAML 时抛 "对属性 Width 指定的值无效"（实测踩到）。 -->
+    <GridLength x:Key="Preview.Width">340</GridLength>
+    <Thickness x:Key="Cell.Padding">4,0,4,0</Thickness>
+
+    <Thickness x:Key="Row.Padding">8,2,8,2</Thickness>
+    <Thickness x:Key="Row.ItemMargin">0</Thickness>
+    <Thickness x:Key="SearchRow.Padding">10,0</Thickness>
+    <Thickness x:Key="Panel.Margin">0</Thickness>
+
+    <!-- ── 字体 ───────────────────────────────────────────
+         字体栈末尾<b>必须显式写中文字体</b>：只写 Segoe UI 时，WPF 对中文的回退会挑到
+         Yu Gothic UI 之类的日文字体（实测：界面上的汉字是日文字形，"直/骨/込"这类字一眼能看出）。
+         Microsoft YaHei UI 是 Win10+ 自带的中文界面字体。 -->
+    <FontFamily x:Key="Font.Text">Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI, Microsoft YaHei, SimSun</FontFamily>
+    <FontFamily x:Key="Glyph.Font">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    <FontFamily x:Key="Font.Mono">Cascadia Mono, Consolas, Microsoft YaHei UI, Courier New</FontFamily>
+    <!-- 字号 —— **单位是 DIP（1/96 英寸），不是磅**：1 pt = 1.333 DIP（WPF 默认 12 DIP = 9pt）。
+         本机基准：系统 UI / 资源管理器列表字体 = Microsoft YaHei UI 9pt = 12 DIP
+         （SPI_GETICONTITLELOGFONT 实测 lfHeight=-12）。下面每行的 pt 就是跟它的换算。
+
+         2026-09-20 定的规矩（用户）：**区域/分区标题比内部元素大一档，内部元素一律统一 9pt。**
+           · 标题（左栏"来源"、预览的选中项标题、设置窗分区标题）= SectionTitle 14 DIP = 10.5pt；
+           · 其余一切正文与内部元素（左右栏条目、预览元信息、中间列表/筛选标签/列头、
+             状态条、设置窗正文）= 12 DIP = **9pt**，和资源管理器列表同档。
+         下面几个正文键名（Primary / Secondary / Chip / ResultRow / FilterTab / ColumnHeader）
+         取值刻意相同 —— 留多个键只是为了标记用途，将来要分档就从这里改。
+         注意先修掉了"WPF-UI 隐式 TextBlock 样式顶掉继承"的 bug（见 App.xaml），令牌才真落到像素上。 -->
+    <sys:Double x:Key="Font.Size.SectionTitle">14</sys:Double>       <!-- 10.5 pt：区域/分区标题 -->
+    <sys:Double x:Key="Font.Size.Primary">12</sys:Double>            <!-- 9.0 pt -->
+    <sys:Double x:Key="Font.Size.Secondary">12</sys:Double>          <!-- 9.0 pt -->
+    <sys:Double x:Key="Font.Size.Chip">12</sys:Double>               <!-- 9.0 pt -->
+    <sys:Double x:Key="Font.Size.Search">12.5</sys:Double>           <!-- 9.4 pt：全局输入框，比正文略大 -->
+    <!-- 中间列专用（结果行 / 筛选标签 / 列头）：与正文同档 9pt，资源管理器的列表文字和列头也是这样 -->
+    <sys:Double x:Key="Font.Size.ResultRow">12</sys:Double>          <!-- 9.0 pt -->
+    <sys:Double x:Key="Font.Size.FilterTab">12</sys:Double>          <!-- 9.0 pt -->
+    <sys:Double x:Key="Font.Size.ColumnHeader">12</sys:Double>       <!-- 9.0 pt -->
+
+    <!-- ── 圆角与描边 ───────────────────────────────────── -->
+    <CornerRadius x:Key="Radius.Default">4</CornerRadius>
+    <CornerRadius x:Key="Radius.Chip">3</CornerRadius>
+    <sys:Double x:Key="Stroke.Width">1</sys:Double>
+    <sys:Double x:Key="Selection.BorderWidth">2</sys:Double>
+
+    <!-- ── 颜色 ─────────────────────────────────────────
+         全部写死为 Win11 浅色令牌的**不透明**值，不用 SystemColors + Opacity 叠加：
+         叠加刷没有基底色，一旦被当成大面积背景（例如窗口背景）就会合成出黑底，
+         再配上黑色文字就是"全黑只剩一个光标"。叠加只用于 hover/选中这类覆盖层。
+         不依赖 WPF-UI 内部键名以免其改版。深色主题日后加一份 Dark 字典覆盖同键名即可。 -->
+
+    <!-- 基底（不透明） -->
+    <SolidColorBrush x:Key="Brush.Surface"       Color="#FFF3F3F3" /><!-- 窗口底：Win11 mica 浅色近似 -->
+    <SolidColorBrush x:Key="Brush.Surface.Card"  Color="#FFFFFFFF" /><!-- 卡片/输入框实底 -->
+    <SolidColorBrush x:Key="Brush.Surface.Sunken" Color="#FFE9E9E9" /><!-- 下沉区：搜索框默认底 -->
+
+    <!-- 文字（不透明） -->
+    <SolidColorBrush x:Key="Brush.Text.Primary"   Color="#FF1A1A1A" />
+    <SolidColorBrush x:Key="Brush.Text.Secondary" Color="#FF5D5D5D" />
+    <SolidColorBrush x:Key="Brush.Text.Tertiary"  Color="#FF8A8A8A" />
+    <SolidColorBrush x:Key="Brush.Text.OnAccent"  Color="#FFFFFFFF" />
+
+    <!-- 描边（不透明） -->
+    <SolidColorBrush x:Key="Brush.Stroke.Default" Color="#FFE0E0E0" />
+    <SolidColorBrush x:Key="Brush.Stroke.Subtle"  Color="#FFEAEAEA" />
+
+    <!-- 覆盖层（半透明，必须有基底才用） -->
+    <SolidColorBrush x:Key="Brush.Subtle"        Color="#0B000000" /><!-- 4.3% -->
+    <SolidColorBrush x:Key="Brush.Subtle.Hover"  Color="#14000000" /><!-- 7.8% -->
+    <SolidColorBrush x:Key="Brush.Selection"     Color="#240067C0" /><!-- 强调色 14% -->
+    <SolidColorBrush x:Key="Brush.Chip.Neutral"  Color="#17000000" /><!-- 9% -->
+
+    <!-- 强调色（Win11 默认强调蓝） -->
+    <SolidColorBrush x:Key="Brush.Accent"        Color="#FF0067C0" />
+
+    <!-- chip 色调 -->
+    <SolidColorBrush x:Key="Brush.Chip.Info"     Color="#FF2F6FBF" />
+    <SolidColorBrush x:Key="Brush.Chip.Success"  Color="#FF1A7F4B" />
+    <SolidColorBrush x:Key="Brush.Chip.Warning"  Color="#FFB26B00" />
+    <SolidColorBrush x:Key="Brush.Chip.Danger"   Color="#FFC4314B" />
+    <SolidColorBrush x:Key="Brush.Chip.Accent"   Color="#FF0067C0" />
+
+    <!-- ── 图标码点（Segoe Fluent Icons） ───────────────── -->
+    <!-- 图标码点用数字字符引用写明，便于核对 UI-SPEC §6（私有区字符直接嵌在源文件里不可读） -->
+    <sys:String x:Key="Glyph.Category.all">&#xE71D;</sys:String>
+    <sys:String x:Key="Glyph.Category.files">&#xE8A5;</sys:String>
+    <sys:String x:Key="Glyph.Category.folders">&#xE8B7;</sys:String>
+    <sys:String x:Key="Glyph.Category.documents">&#xE8A5;</sys:String>
+    <sys:String x:Key="Glyph.Category.images">&#xEB9F;</sys:String>
+    <sys:String x:Key="Glyph.Category.videos">&#xE786;</sys:String>
+    <sys:String x:Key="Glyph.Category.music">&#xE8D6;</sys:String>
+    <sys:String x:Key="Glyph.Category.apps">&#xECA5;</sys:String>
+    <sys:String x:Key="Glyph.Category.literature">&#xE8F1;</sys:String>
+    <sys:String x:Key="Glyph.Category.notes">&#xE70B;</sys:String>
+    <sys:String x:Key="Glyph.Category.content">&#xE85C;</sys:String>
+    <sys:String x:Key="Glyph.Category.archives">&#xF129;</sys:String>
+    <sys:String x:Key="Glyph.Category.code">&#xE943;</sys:String>
+    <sys:String x:Key="Glyph.Category.web">&#xE774;</sys:String>
+    <sys:String x:Key="Glyph.Category.more">&#xE712;</sys:String>
+    <sys:String x:Key="Glyph.Search">&#xE721;</sys:String>
+    <sys:String x:Key="Glyph.Settings">&#xE713;</sys:String>
+    <sys:String x:Key="Glyph.Diagnostics">&#xE9D9;</sys:String>
+    <sys:String x:Key="Glyph.Warning">&#xE7BA;</sys:String>
+
+    <!-- ── 动画时长：克制，密集界面不能拖沓 ─────────────── -->
+    <Duration x:Key="Anim.Fast">0:0:0.08</Duration>
+    <Duration x:Key="Anim.Normal">0:0:0.14</Duration>
+
+</ResourceDictionary>

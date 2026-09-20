@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>UniSearch.Host</RootNamespace>
+    <AssemblyName>UniSearch</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 应用图标：托盘、任务栏、Alt-Tab 都用它。由 tools/make-icon.ps1 生成（自己画的，许可证干净） -->
+    <ApplicationIcon>Assets\UniSearch.ico</ApplicationIcon>
+    <Description>UniSearch 前端宿主：紧凑结果窗口、托盘、全局热键、Provider 装配。</Description>
+    <!-- 输出路径不带 TFM：目标框架一变（例如为 PDF 预览抬到 net8.0-windows10.0.19041.0），
+         输出目录就跟着变，而 tools/capture-ui.ps1、文档、日常启动命令仍指向旧目录 ——
+         结果一直在跑上一次构建的陈旧 exe。踩过一次：预览改动全部"没生效"，查了很久。 -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <!-- 让 CsWin32 落盘生成源：排查"哪些互操作真的生成了"时能看到文件，也能被 diff。
+         生成结果在 obj/Debug/Generated/CsWin32/。 -->
+    <CsWin32RunAsBuildTask>true</CsWin32RunAsBuildTask>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UniSearch.Sdk\UniSearch.Sdk.csproj" />
+    <ProjectReference Include="..\UniSearch.Core\UniSearch.Core.csproj" />
+    <ProjectReference Include="..\UniSearch.Providers.Everything\UniSearch.Providers.Everything.csproj" />
+    <PackageReference Include="WPF-UI" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- Shell COM 互操作：预览缩略图 + 真·shell 右键菜单（MIT，见 Directory.Packages.props 注释） -->
+    <PackageReference Include="Vanara.PInvoke.Shell32" />
+    <!-- 全局热键（Apache-2.0）：Ctrl+F / Win+Alt+Space 唤出 -->
+    <PackageReference Include="NHotkey.Wpf" />
+    <!-- 托盘图标（MIT）：常驻后台 + 右键退出。托盘图标的 .ico 也作为资源嵌入，供运行时读取 -->
+    <PackageReference Include="NativeTray" />
+    <!-- 生成 IShellWindows / IWebBrowser2 互操作：取前台 Explorer 的当前目录（Ctrl+F 限定目录） -->
+    <PackageReference Include="Microsoft.Windows.CsWin32" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 托盘图标要在运行时读这份 .ico（pack://application:,,,/Assets/UniSearch.ico） -->
+    <Resource Include="Assets\UniSearch.ico" />
+    <!-- 筛选器定义模板：跟程序一起发到 dist\，用户在那里看到"能怎么定义"，
+         自己的那份写在 %LOCALAPPDATA%\UniSearch\filters.json（同名 id 覆盖模板里的）。 -->
+    <None Include="filters.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

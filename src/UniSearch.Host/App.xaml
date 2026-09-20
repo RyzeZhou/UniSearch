@@ -1,0 +1,36 @@
+<Application x:Class="UniSearch.Host.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- WPF-UI 必须成对出现：ThemesDictionary 提供主题资源，ControlsDictionary 提供控件样式。
+                     只并入后者会让样式引用的主题刷全部解析失败（表现为控件透明/发黑）。 -->
+                <ui:ThemesDictionary xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml" Theme="Light" />
+                <ui:ControlsDictionary xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml" />
+
+                <!-- 本项目令牌。顺序敏感：Controls.xaml 用到的尺寸/颜色令牌必须先合并。
+                     转换器不在这里声明 —— 见 Theme/Controls.xaml 顶部注释。 -->
+                <ResourceDictionary Source="/UniSearch;component/Theme/Tokens.xaml" />
+                <ResourceDictionary Source="/UniSearch;component/Theme/Controls.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- ⚠ 必须声明在这里（与 MergedDictionaries 同级），不能塞进上面的合并列表 ——
+                 本字典自己的条目才会压过合并字典里的同键条目。
+
+                 为什么需要它：WPF-UI 4.0.3 的 ControlsDictionary 里带了一个**隐式 TextBlock 样式
+                 并且设了 FontSize=14**。样式 setter 的优先级高于属性继承，于是所有"靠从父级继承
+                 字号"的文字都会被强行画成 14 DIP（=10.5pt），而本项目的字号体系恰恰是
+                 "容器设字号、子元素继承"（结果行 8.5 / 筛选标签 8 / 左栏 11 / 预览 10.5 …）。
+
+                 2026-09-20 实测：整个结果表 + 筛选标签 + 任何以字符串为 Content 的控件
+                 （RadioButton/Button 的 ContentPresenter）全都在按 14 DIP 渲染 —— 比资源管理器的
+                 9pt 还大。前几轮反复下调 Font.Size.* 令牌因此全部无效，用户看到的一直是"比资源
+                 管理器大"。这里重新声明一个**不设 FontSize** 的隐式样式，把"继承"还给 TextBlock。 -->
+            <Style TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource Font.Text}"/>
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

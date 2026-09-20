@@ -1,0 +1,31 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Everything 查询：纯托管 IPC 客户端，不依赖原生 everything.dll（Apache-2.0）
+         阶段二会用自研 QUERY2 客户端替换它（需要 Size/Date/Highlight/RunCount） -->
+    <PackageVersion Include="EverythingSearchClient" Version="0.9.0.148" />
+    <!-- Win11 观感：与 EverythingToolbar 同款（MIT） -->
+    <PackageVersion Include="WPF-UI" Version="4.0.3" />
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Windows.CsWin32" Version="0.3.298" />
+    <!-- http://Vanara.PInvoke.Shell32：Shell COM 互操作（MIT，已核实支持 net8.0-windows）。
+         一次覆盖两件事：预览窗格的 IShellItemImageFactory 缩略图，以及真·shell 右键菜单的
+         IContextMenu/2/3。自写这两套 interop 要几百行且极易踩 owner-draw 消息转发的坑。
+         注意别用 SharpVectors（BSD-3，超出本项目的 MIT/Apache-2.0 范围）。 -->
+    <PackageVersion Include="Vanara.PInvoke.Shell32" Version="5.0.7" />
+    <!-- 全局热键：EverythingToolbar 与 FlowLauncher 同款（Apache-2.0，已核实）。
+         别手写 RegisterHotKey + 隐藏消息窗口 —— 同名热键已注册这类冲突它已经处理了。 -->
+    <PackageVersion Include="NHotkey.Wpf" Version="4.0.0" />
+    <!-- 托盘图标（MIT，已核实支持 net8.0-windows，且本地缓存已有 2.2.3）。
+         ET（EverythingToolbar）同款；比 Hardcodet.NotifyIcon.Wpf 的许可证更干净
+         （后者是 CPOL，不在我们允许的 MIT/Apache-2.0 范围内）。 -->
+    <PackageVersion Include="NativeTray" Version="2.2.3" />
+    <PackageVersion Include="xunit" Version="2.9.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+  </ItemGroup>
+</Project>
