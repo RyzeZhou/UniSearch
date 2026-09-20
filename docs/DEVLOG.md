@@ -1167,6 +1167,49 @@ Thumb / ScrollBar 自己的拖动全部失效。用户看到的就是"滑块和�
   `向右滚 0 -> 96 ✓`（`CanContentScroll=True Extent=1263 Viewport=702 可滚=561`）。
 - `UI-SPEC.md` 快捷键表加了 `Shift`+滚轮 一行；内置帮助文本同步。
 
+---
+## 2026-09-20 第 11 轮（Ctrl+F 不该全局独占：改成"只在前台是资源管理器时拦截"）
+
+### 本轮目标（用户原话）
+
+> 有问题，Ctrl+F 似乎是全局监听，我在记事本按这个快捷键也呼出了 Unisearch。
+
+### 根因
+
+`Ctrl+F` 走的是 NHotkey 的 `RegisterHotKey` —— 那是**系统级独占注册**：注册成功之后，
+**所有**程序里的 Ctrl+F 都被我们抢走（记事本/浏览器/编辑器的"查找"全失效），
+按下时 `OnDirectoryScope` 发现前台不是 Explorer，就按 C6 的约定"静默降级为全局"——
+于是用户在记事本里按 Ctrl+F，看到的是 UniSearch 弹出来。用户日志里留有现场：
+`16:30:55 [hotkey] 目录限定热键：前台不是 Explorer，退回全局`。
+
+### 改法：低级键盘钩子 + 前台判定
+
+- 目录限定键不再用 `RegisterHotKey`，改为 `BlockingKeyHotkey`（`WH_KEYBOARD_LL`）：
+  回调里先做最便宜的短路（是不是那个键码、修饰键是否**正好**相符），
+  最后才判断"前台窗口的进程是不是 explorer.exe"，不是就 `CallNextHookEx` **原样放行**。
+  只有前台是 Explorer 时才吞掉按键并唤出（吞掉意味着接管 Explorer 自己原本的 Ctrl+F，这是既定语义）。
+- `Alt+Win+Space` 继续走 `RegisterHotKey` —— 这个组合键本来就没人用，独占没有副作用。
+- 钩子实现的四个坑都写进注释了：① 回调委托**必须存字段**（被 GC 回收 → 钩子静默失效）；
+  ② 回调在装钩子的线程（UI 线程）上跑；③ 必须便宜短路，否则撞 `LowLevelHooksTimeout` 被摘掉；
+  ④ 长按会连发 KEYDOWN，用 latch 去抖，别唤出几十次。
+- 判定逻辑抽成纯函数 `BlockingKeyHotkey.ShouldIntercept(gesture, pressed, vkCode, foregroundMatches)`，
+  自检可以直接断言（钩子回调本身没法测）。
+
+### 验证
+
+- **真机按键实测**（`tmp\UniSearch\hotkey-scope-test.ps1` / `hotkey-explorer-test2.ps1`，
+  用 `keybd_event` 发真实 Ctrl+F，读 `host.log`）：
+  - 前台=记事本（非 Explorer）：新增的"目录限定"日志 **0 条** → Ctrl+F 原样放行 ✓（这正是用户报的场景）；
+  - 前台=Explorer 窗口：命中拦截，日志出现"目录限定热键" ✓。
+  - （附注：自动化里那次 Explorer 的目录读到的是 null，因此退回了全局 —— 因为脚本是硬把前台
+    切到一个句柄很怪的 CabinetWClass 上，且当时有 3 个 Explorer 窗口；手工单窗口场景此前已验证过 C1/C4。）
+- `--selftest-hotkey`：`目录限定键钩子已安装=True`；
+  `拦截判定（Ctrl+F）：前台=资源管理器 -> True；前台=记事本 -> False；多按 Shift -> False；
+  裸按 F -> False；别的键 D -> False` —— 全部符合预期。
+- 构建 0 错误、单测 94/94；已重发 `dist\`。
+- `UI-SPEC.md` 快捷键表、`MVP.md`（新增 C6b）、设置窗那条说明文字都已改写。
+
+
 
 ---
 ### 第 9 轮补记（用户确认修复生效，要求抬到 9pt）

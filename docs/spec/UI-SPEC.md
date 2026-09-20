@@ -118,7 +118,7 @@ Yu Gothic UI 之类的**日文字体**，"直""骨"这类字一眼能看出是�
 
 | 键 | 行为 | 实现备注 |
 |---|---|---|
-| `Ctrl+F`（在 Explorer/桌面前台中） | 唤出本窗口并限定当前目录 | ShellContext：`RegisterHotKey` + Flow DialogJump 路线（REF-2 §2.1） |
+| `Ctrl+F` | 唤出本窗口并限定当前目录。**只在前台窗口属于 Explorer（或桌面）时才拦截** —— 用低级键盘钩子（`WH_KEYBOARD_LL`）实现，在记事本/浏览器/编辑器里按 Ctrl+F 原样放行给那些程序；不能用 `RegisterHotKey`（那是系统级独占，会把所有程序的"查找"抢掉，2026-09-20 用户实测报过） | `BlockingKeyHotkey` + Flow DialogJump 路线（REF-2 §2.1） |
 | `Win+Alt+Space`（可自定义） | 唤出，范围=全局 | 同上，不改 Explorer |
 | `Esc`（已聚焦时） | 隐藏窗口并把焦点还给来源窗口 | 记录 `OwnerWindow` |
 

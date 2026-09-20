@@ -299,7 +299,20 @@ public static class UiSelfTest
     public static void RunHotkeys(GlobalHotkeys hotkeys, Func<string?> probe, IUniSearchLog log)
     {
         foreach (var (name, gesture, ok) in hotkeys.Registered)
-            log.Info("selftest", $"热键 {gesture} ({name}) -> {(ok ? "已注册" : "被其它程序占用")}");
+            log.Info("selftest", $"热键 {gesture} ({name}) -> {(ok ? "已就绪" : "未就绪")}");
+        log.Info("selftest", $"目录限定键钩子已安装={hotkeys.DirectoryScopeHookInstalled}（它不再用 RegisterHotKey 独占注册）");
+
+        // 拦截判定：这是"记事本按 Ctrl+F 不该被抢"的关键，直接断言纯函数
+        var g = Settings.Gestures.Parse("Ctrl+F");
+        var vkF = System.Windows.Input.KeyInterop.VirtualKeyFromKey(System.Windows.Input.Key.F);
+        var vkD = System.Windows.Input.KeyInterop.VirtualKeyFromKey(System.Windows.Input.Key.D);
+        log.Info("selftest", "拦截判定（Ctrl+F）：" +
+            $"前台=资源管理器 -> {BlockingKeyHotkey.ShouldIntercept(g, System.Windows.Input.ModifierKeys.Control, vkF, true)}（期望 True）；" +
+            $"前台=记事本 -> {BlockingKeyHotkey.ShouldIntercept(g, System.Windows.Input.ModifierKeys.Control, vkF, false)}（期望 False）；" +
+            $"多按 Shift -> {BlockingKeyHotkey.ShouldIntercept(g, System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift, vkF, true)}（期望 False）；" +
+            $"裸按 F -> {BlockingKeyHotkey.ShouldIntercept(g, System.Windows.Input.ModifierKeys.None, vkF, true)}（期望 False）；" +
+            $"别的键 D -> {BlockingKeyHotkey.ShouldIntercept(g, System.Windows.Input.ModifierKeys.Control, vkD, true)}（期望 False）");
+
         log.Info("selftest", $"ExplorerLocator.GetCurrentDirectory -> [{probe() ?? "(null)"}]");
     }
 

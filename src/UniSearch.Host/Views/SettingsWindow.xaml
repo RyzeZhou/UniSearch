@@ -105,7 +105,7 @@
                                          ToolTip="点这里，然后按下想用的组合键"/>
                             </StackPanel>
                             <TextBlock Style="{StaticResource Hint}"
-                                       Text="按下时会打开搜索并限定到前台资源管理器的当前目录。注意它会全局接管资源管理器原本的 Ctrl+F；前台不是资源管理器时自动退回全局搜索。"/>
+                                       Text="按下时打开搜索并限定到前台资源管理器的当前目录。只在资源管理器是前台窗口时才拦截：在记事本/浏览器/编辑器里按同一个键仍归那些程序自己，不会被抢。在资源管理器里它会接管其原本的 Ctrl+F。前台的资源管理器没有可用的本地目录时（例如「此电脑」）退回全局搜索。"/>
 
                             <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0" TextWrapping="Wrap"
                                        Text="想取消某一个热键：点进输入框按 Delete 清空即可（留空 = 不注册）。至少要有一个修饰键（Ctrl / Alt / Shift / Win）。"/>
