@@ -242,6 +242,87 @@ public sealed class ShellContextMenu : IDisposable
     }
 
     /// <summary>
+    /// **路 B PoC**（第 12 轮阶段 6）：**跨目录多选**的 shell 菜单管道。
+    /// <para>
+    /// 单选用的是 <c>SHBindToParent + IShellFolder.GetUIObjectOf</c>，那条路只能吃
+    /// <b>同一个父目录</b>下的多选 —— 而搜索结果天然跨目录。这里走
+    /// <c>IShellItemArray.BindToHandler(BHID_SFUIObject)</c>（文档化路径）试能不能拿到菜单。
+    /// </para>
+    /// <para>
+    /// 只验证"能不能拿到动词表"：<c>TrackPopupMenuEx</c> 会阻塞等用户点击，自动化验不了。
+    /// 拿到动词表就说明这条路可行；拿不到就放弃路 B，只用我们自己的批量动作。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> ListVerbsMulti(IReadOnlyList<string> paths, out string error)
+    {
+        error = string.Empty;
+        var verbs = new List<string>();
+        if (paths.Count == 0) { error = "没有路径"; return verbs; }
+
+        var pidls = new List<Shell32.PIDL>();
+        try
+        {
+            foreach (var p in paths)
+            {
+                var pidl = Shell32.ILCreateFromPath(p);
+                if (pidl is null || pidl.IsInvalid) { error = $"拿不到 PIDL：{p}"; return verbs; }
+                pidls.Add(pidl);
+            }
+
+            var hrArray = Shell32.SHCreateShellItemArrayFromIDLists(pidls, out var array);
+            if (hrArray.Failed || array is null)
+            {
+                error = $"SHCreateShellItemArrayFromIDLists 失败：{hrArray}";
+                return verbs;
+            }
+
+            // 用 Vanara 的**泛型扩展** BindToHandler<T>：它内部做正确的接口转换。
+            // 直接调 IShellItemArray.BindToHandler 会走 Marshal.GetObjectForIUnknown，
+            // 对不支持 IDispatch 的接口抛 InvalidCastException（实测踩到，堆栈就在那一行）。
+            Shell32.IContextMenu? cm = null;
+            try
+            {
+                cm = Shell32.BindToHandler<Shell32.IContextMenu>(array, null, Shell32.BHID.BHID_SFUIObject);
+            }
+            catch (System.Runtime.InteropServices.COMException ex)
+            {
+                // 实测（2026-09-26，Win10 22H2）：跨目录的 IShellItemArray 在这里返回 E_FAIL ——
+                // 系统自己也没法为"不同文件夹的项"构造出多选菜单（Explorer 内部用的是未文档化的
+                // CDefFolderMenu_Create2）。结论见 UiSelfTest.RunShellMenuMulti 的 PoC 报告。
+                error = $"BindToHandler(BHID_SFUIObject) 失败：{ex.Message}";
+                return verbs;
+            }
+            if (cm is null)
+            {
+                error = "BindToHandler(BHID_SFUIObject) 没拿到 IContextMenu";
+                return verbs;
+            }
+
+            _cm3 = cm as Shell32.IContextMenu3;
+            _cm2 = cm as Shell32.IContextMenu2;
+
+            using var hMenu = User32.CreatePopupMenu();
+            var hrQuery = cm.QueryContextMenu(hMenu, 0, IDCMD_FIRST, IDCMD_LAST, Shell32.CMF.CMF_NORMAL);
+            if (hrQuery.Failed) { error = $"QueryContextMenu 失败：{hrQuery}"; return verbs; }
+
+            var count = User32.GetMenuItemCount(hMenu);
+            for (uint i = 0; i < (uint)Math.Max(0, count); i++)
+            {
+                var v = GetVerb(cm, i);
+                if (!string.IsNullOrEmpty(v)) verbs.Add(v);
+            }
+            return verbs;
+        }
+        finally
+        {
+            _cm2 = null;
+            _cm3 = null;
+            // 这里的 PIDL 都是自己 ILCreateFromPath 出来的，必须自己释放
+            foreach (var p in pidls) p.Dispose();
+        }
+    }
+
+    /// <summary>
     /// 自行声明的 <c>CMINVOKECOMMANDINFO</c>（14 字段，与原生布局一致）。
     /// <para>
     /// <b>为什么不用 Vanara 的 <c>CMINVOKECOMMANDINFO</c> / <c>EX</c>：</b>

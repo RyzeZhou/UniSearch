@@ -273,6 +273,21 @@ public partial class App : Application
             return;
         }
 
+        // --selftest-shellmenu-multi：路 B PoC —— 跨目录多选能不能拿到原生 shell 菜单。不需要 --query。
+        if (e.Args.Contains("--selftest-shellmenu-multi", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                try { if (_shellMenu is not null) UiSelfTest.RunShellMenuMulti(_shellMenu, log); }
+                catch (Exception ex) { log.Error("selftest", "路 B PoC 失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
         // --selftest-filters：核对 filters.json 的加载与问题，以及"筛选器 → 查询串"的翻译。
         if (e.Args.Contains("--selftest-filters", StringComparer.OrdinalIgnoreCase))
         {

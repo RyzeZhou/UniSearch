@@ -818,4 +818,55 @@ public static class UiSelfTest
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
         }
     }
+
+    /// <summary>
+    /// **路 B PoC**（第 12 轮阶段 6）：跨目录多选能不能拿到原生 shell 菜单。
+    /// 单选的 <c>SHBindToParent + GetUIObjectOf</c> 只吃同一父目录下的多选，而搜索结果天然跨目录；
+    /// 这里造两个**不同目录**的文件，试 <c>IShellItemArray.BindToHandler(BHID_SFUIObject)</c>。
+    /// 拿到动词表 = 路 B 可行（Win11 上就能白拿系统的"压缩为 ZIP"与 7-Zip 的动词）。
+    /// </summary>
+    public static void RunShellMenuMulti(ShellContextMenu menu, IUniSearchLog log)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "unisearch-shellmenu-multi");
+        try
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            var dirA = Path.Combine(root, "甲");
+            var dirB = Path.Combine(root, "乙");
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+            var a = Path.Combine(dirA, "a.txt");
+            var a2 = Path.Combine(dirA, "a2.txt");
+            var b = Path.Combine(dirB, "b.txt");
+            File.WriteAllText(a, "a");
+            File.WriteAllText(a2, "a2");
+            File.WriteAllText(b, "b");
+
+            // 对照：单选（同一目录）能拿到的动词
+            var single = menu.ListVerbs(a, out var singleError);
+            log.Info("selftest", $"单选动词（{Path.GetFileName(a)}）：{single.Count} 个 " +
+                                 $"[{string.Join(", ", single.Take(12))}]{(singleError.Length > 0 ? " 错误：" + singleError : "")}");
+
+            // 跨目录多选
+            var multi = menu.ListVerbsMulti(new[] { a, b }, out var multiError);
+            log.Info("selftest", $"跨目录多选动词（甲\\a.txt + 乙\\b.txt）：{multi.Count} 个 " +
+                                 $"[{string.Join(", ", multi.Take(20))}]{(multiError.Length > 0 ? " 错误：" + multiError : "")}");
+
+            // 同目录多选（路 A 已能处理的场景）作对照
+            var sameDir = menu.ListVerbsMulti(new[] { a, a2 }, out _);
+            log.Info("selftest", $"同目录多选动词：{sameDir.Count} 个");
+
+            log.Info("selftest", multi.Count > 0
+                ? "路 B PoC：跨目录多选**能**拿到原生 shell 菜单 ✓"
+                : "路 B PoC：跨目录多选**拿不到**原生 shell 菜单 ✗（那就只用我们自己的批量动作）");
+        }
+        catch (Exception ex)
+        {
+            log.Error("selftest", "路 B PoC 异常", ex);
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+        }
+    }
 }
