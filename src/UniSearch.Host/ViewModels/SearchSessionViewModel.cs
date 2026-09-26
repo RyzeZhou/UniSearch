@@ -139,6 +139,64 @@ public sealed partial class SearchSessionViewModel : ObservableObject
                      .Select(p => p!)
                      .ToList();
 
+    // ─────────────── 多选批量菜单（第 12 轮）───────────────
+
+    /// <summary>右键落在哪一行时的处理决策。抽成纯函数是为了能自检断言 ——
+    /// 真实右键手势（合成鼠标）会被 UIPI 拦掉，没法自动化。</summary>
+    internal enum RightClickDecision { KeepSelection, ResetToRow }
+
+    /// <summary>
+    /// 已选中项上右键 → <b>保住整份选择</b>（否则一右键只剩一行，批量动作无从谈起）；
+    /// 未选中项上右键 / 单选状态 → 重置为光标下那一行（资源管理器的习惯）。
+    /// </summary>
+    internal static RightClickDecision DecideRightClick(bool rowAlreadySelected, int selectedCount)
+        => rowAlreadySelected && selectedCount > 1 ? RightClickDecision.KeepSelection
+                                                   : RightClickDecision.ResetToRow;
+
+    const uint BatchCopyPaths = 0x8101;
+    const uint BatchCopyNames = 0x8102;
+    const uint BatchConsole = 0x8103;
+
+    /// <summary>批量菜单的项（id, 标签），顺序即显示顺序。
+    /// 阶段 3 会把「压缩为 ZIP」插到最前（它是这条需求的正主）。</summary>
+    internal static IReadOnlyList<(uint Id, string Label)> BuildBatchMenuItems(int count)
+        => new List<(uint, string)>
+        {
+            (BatchCopyPaths, $"复制 {count} 个路径(&C)"),
+            (BatchCopyNames, $"复制 {count} 个名称(&N)"),
+            (BatchConsole, "在终端中打开(&T)"),
+        };
+
+    /// <summary>批量菜单的动作分发。返回 false 表示 id 不认识。</summary>
+    internal bool RunBatchAction(uint id)
+    {
+        switch (id)
+        {
+            case BatchCopyPaths: CopySelectedPaths(); return true;
+            case BatchCopyNames: CopySelectedNames(); return true;
+            case BatchConsole: OpenInConsoleSelected(); return true;   // 取主选中项所在目录
+        }
+        return false;
+    }
+
+    /// <summary>复制多选里的全部路径：<b>每行一条</b>（资源管理器"复制"粘贴到别处的常见口径）。</summary>
+    public void CopySelectedPaths()
+    {
+        var paths = SelectedPaths();
+        if (paths.Count == 0) { Report(false, "选中的项没有本地路径"); return; }
+        CopyToClipboard(string.Join(Environment.NewLine, paths));
+        Report(true, $"已复制 {paths.Count} 个路径");
+    }
+
+    /// <summary>复制多选里的全部名称（每行一条）。</summary>
+    public void CopySelectedNames()
+    {
+        var names = _selection.Select(r => r.Title).Where(t => !string.IsNullOrEmpty(t)).ToList();
+        if (names.Count == 0) { Report(false, "没有可复制的名称"); return; }
+        CopyToClipboard(string.Join(Environment.NewLine, names));
+        Report(true, $"已复制 {names.Count} 个名称");
+    }
+
     // ─────────────── 结果表（平铺单表 + 可调列 + 列排序）───────────────
 
     /// <summary>当前显示的行：已排序、已按 <see cref="MaxRows"/> 截断。</summary>

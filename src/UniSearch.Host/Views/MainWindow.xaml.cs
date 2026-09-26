@@ -676,11 +676,33 @@ public partial class MainWindow : Window
 
     void OnRootPreviewMouseRightDown(object sender, MouseButtonEventArgs e)
     {
-        // 右键必须先把选中落到光标下那一行，否则菜单动作会作用在别处
         if (FindRow(e.OriginalSource as DependencyObject) is not { } row) return;
-        Vm.Selected = row;
 
-        // 有真实文件路径 → 直接弹系统 shell 菜单：它包含"打开方式/发送到/属性"和第三方动词
+        // 第 12 轮多选：右键落在**已选中项**上要保住整份选择（否则一右键只剩一行，批量动作无从谈起）；
+        // 落在**未选中项**上按资源管理器习惯重置为单选那一行。
+        var decision = SearchSessionViewModel.DecideRightClick(
+            rowAlreadySelected: ResultList.SelectedItems.Contains(row),
+            selectedCount: ResultList.SelectedItems.Count);
+
+        if (decision == SearchSessionViewModel.RightClickDecision.ResetToRow)
+        {
+            ResultList.SelectedItems.Clear();
+            row.IsSelected = true;    // 触发 SelectionChanged → SyncSelection
+            Vm.Selected = row;        // 兜底：ListView 还没回写时，菜单动作也拿到光标下这一行
+        }
+
+        // 多选 → 批量菜单。**不能**走 shell 菜单：那条路只吃单个 PIDL
+        //（跨目录多选要 IShellItemArray，见计划 §3.1 路 B），所以多选用 WPF 菜单、动作全是我们自己的。
+        if (Vm.HasMultiSelection)
+        {
+            _shellMenuShown = true;
+            e.Handled = true;
+            var ptMulti = PointToScreen(e.GetPosition(this));
+            ShowBatchMenuAt((int)ptMulti.X, (int)ptMulti.Y);
+            return;
+        }
+
+        // 单选：有真实文件路径 → 直接弹系统 shell 菜单：它包含"打开方式/发送到/属性"和第三方动词
         // （7-Zip、Git…），是我们自己那份菜单给不了的。
         // 路径为空的结果（将来的 Zotero 条目、书签等）没有 shell 语义，交给 WPF 菜单。
         if (row.Source.Path is { Length: > 0 } path)
@@ -694,6 +716,29 @@ public partial class MainWindow : Window
         {
             _shellMenuShown = false;
         }
+    }
+
+    /// <summary>
+    /// 多选批量菜单（WPF 菜单）。坐标必须从**物理像素换算成 DIP** ——
+    /// WPF 的 <c>AbsolutePoint</c> 用设备无关单位，本机 175% 缩放下直接拿屏幕像素会偏出一大截
+    /// （shell 菜单那边正相反：<c>TrackPopupMenuEx</c> 只认物理像素）。这个方向性差异值得记一笔。
+    /// </summary>
+    void ShowBatchMenuAt(int screenX, int screenY)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var menu = new ContextMenu
+        {
+            Placement = System.Windows.Controls.Primitives.PlacementMode.AbsolutePoint,
+            HorizontalOffset = screenX / dpi.DpiScaleX,
+            VerticalOffset = screenY / dpi.DpiScaleY,
+        };
+        foreach (var (id, label) in SearchSessionViewModel.BuildBatchMenuItems(Vm.SelectionCount))
+        {
+            var item = new MenuItem { Header = label, Tag = id };
+            item.Click += (_, _) => Vm.RunBatchAction((uint)item.Tag);
+            menu.Items.Add(item);
+        }
+        menu.IsOpen = true;
     }
 
     void OnRootPreviewMouseRightUp(object sender, MouseButtonEventArgs e)

@@ -694,7 +694,28 @@ public static class UiSelfTest
                              $"{(paths.Count > 0 ? " 例：" + paths[0] : "")}");
         ok &= multiOk;
 
-        // ③ 清空：Esc 的语义（先取消选择，窗口还在）
+        // ③ 右键落点决策（纯函数）：真实右键手势自动化不了，决策逻辑必须能断言
+        var keep = SearchSessionViewModel.DecideRightClick(true, 3);
+        var resetSingle = SearchSessionViewModel.DecideRightClick(true, 1);
+        var resetOther = SearchSessionViewModel.DecideRightClick(false, 3);
+        var decideOk = keep == SearchSessionViewModel.RightClickDecision.KeepSelection
+                       && resetSingle == SearchSessionViewModel.RightClickDecision.ResetToRow
+                       && resetOther == SearchSessionViewModel.RightClickDecision.ResetToRow;
+        log.Info("selftest", $"右键落点：已选中&多选={keep}（期望 KeepSelection）；" +
+                             $"已选中&单选={resetSingle}（期望 ResetToRow）；未选中&多选={resetOther}（期望 ResetToRow）");
+        ok &= decideOk;
+
+        // ④ 批量菜单项 + 复制路径真跑一次（读剪贴板核对行数）
+        var items = SearchSessionViewModel.BuildBatchMenuItems(vm.SelectionCount);
+        log.Info("selftest", $"批量菜单项：{string.Join(" | ", items.Select(i => i.Label))}");
+        vm.CopySelectedPaths();
+        var clip = SafeClipboard();
+        var clipLines = string.IsNullOrEmpty(clip) ? 0 : clip.Split('\n').Length;
+        var pathCount = vm.SelectedPaths().Count;
+        log.Info("selftest", $"复制 {vm.SelectionCount} 个路径 -> 剪贴板 {clipLines} 行（期望 {pathCount}）");
+        ok &= clipLines == pathCount;
+
+        // ⑤ 清空：Esc 的语义（先取消选择，窗口还在）
         vm.SyncSelection(Array.Empty<ResultItemViewModel>());
         var clearOk = vm.SelectionCount == 0 && !vm.HasMultiSelection && vm.SelectionSummary is null;
         log.Info("selftest", $"清空：count={vm.SelectionCount} multi={vm.HasMultiSelection} " +
