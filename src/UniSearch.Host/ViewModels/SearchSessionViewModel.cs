@@ -158,6 +158,7 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     const uint BatchCopyPaths = 0x8101;
     const uint BatchCopyNames = 0x8102;
     const uint BatchConsole = 0x8103;
+    const uint BatchCopyQuoted = 0x8104;
 
     /// <summary>批量菜单的项（id, 标签），顺序即显示顺序。
     /// 「压缩为 ZIP」排第一 —— 它是这条需求的正主（"多选然后压缩文件"）。</summary>
@@ -166,6 +167,7 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         {
             (BatchArchive, "压缩为 ZIP(&Z)…"),
             (BatchCopyPaths, $"复制 {count} 个路径(&C)"),
+            (BatchCopyQuoted, $"复制为引号列表(&Q)"),
             (BatchCopyNames, $"复制 {count} 个名称(&N)"),
             (BatchConsole, "在终端中打开(&T)"),
         };
@@ -177,6 +179,7 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         {
             case BatchArchive: ArchiveSelectedAsZip(); return true;
             case BatchCopyPaths: CopySelectedPaths(); return true;
+            case BatchCopyQuoted: CopySelectedPathsQuoted(); return true;
             case BatchCopyNames: CopySelectedNames(); return true;
             case BatchConsole: OpenInConsoleSelected(); return true;   // 取主选中项所在目录
         }
@@ -196,14 +199,40 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         var paths = SelectedPaths();
         if (paths.Count == 0) { Report(false, "选中的项没有本地路径，无法压缩"); return; }
 
+        if (Archive.MaxItems > 0 && paths.Count > Archive.MaxItems)
+        {
+            Report(false, $"选中 {paths.Count} 项，超过上限 {Archive.MaxItems}（改 archive.maxItems 或分批压）");
+            return;
+        }
+
         var plan = ArchivePlanner.PlanEntries(paths);
         if (plan.Count == 0) { Report(false, "没有可压缩的条目"); return; }
 
         var firstDir = Path.GetDirectoryName(paths[0]);
         if (string.IsNullOrEmpty(firstDir)) firstDir = Environment.CurrentDirectory;
         var parentName = Path.GetFileName(firstDir.TrimEnd('\\'));
-        var fileName = ArchivePlanner.BuildArchiveName(null, parentName, plan.Count, DateTime.Now) + ".zip";
-        var zipPath = ArchivePlanner.EnsureUniqueFile(firstDir, fileName, File.Exists);
+        var fileName = ArchivePlanner.BuildArchiveName(Archive.NameTemplate, parentName, plan.Count, DateTime.Now) + ".zip";
+
+        // 落点是设置项：ask（每次弹保存对话框，满足"我想自己挑地方"）/ same-as-first（默认，最顺手）
+        string zipPath;
+        if (string.Equals(Archive.Destination, "ask", StringComparison.OrdinalIgnoreCase))
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "压缩到…",
+                FileName = fileName,
+                DefaultExt = ".zip",
+                Filter = "ZIP 压缩包 (*.zip)|*.zip",
+                InitialDirectory = firstDir,
+                OverwritePrompt = true,
+            };
+            if (dlg.ShowDialog() != true) { Report(true, "已取消压缩"); return; }
+            zipPath = dlg.FileName;
+        }
+        else
+        {
+            zipPath = ArchivePlanner.EnsureUniqueFile(firstDir, fileName, File.Exists);
+        }
 
         Report(true, $"正在压缩 {plan.Count} 项…");
         _log?.Info("archive", $"开始压缩 {plan.Count} 项 -> {zipPath}");
@@ -219,7 +248,7 @@ public sealed partial class SearchSessionViewModel : ObservableObject
                            $"已压缩 {added} 个条目 → {zipPath}",
                            $"已压缩 {added} 个条目，{failures.Count} 项失败（详见 host.log）");
                     if (failures.Count > 0) _log?.Warn("archive", string.Join("; ", failures.Take(5)));
-                    RevealPathInExplorer(zipPath);
+                    if (Archive.RevealAfter) RevealPathInExplorer(zipPath);
                 });
             }
             catch (Exception ex)
@@ -269,6 +298,18 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         Report(true, $"已复制 {names.Count} 个名称");
     }
 
+    /// <summary>
+    /// 复制成**引号列表**（<c>"a" "b"</c>）：粘到命令行/脚本里当参数用，
+    /// 路径带空格也不会被拆开。与"每行一条"是两个不同的使用场景，所以两个口径都给。
+    /// </summary>
+    public void CopySelectedPathsQuoted()
+    {
+        var paths = SelectedPaths();
+        if (paths.Count == 0) { Report(false, "选中的项没有本地路径"); return; }
+        CopyToClipboard(string.Join(" ", paths.Select(p => $"\"{p}\"")));
+        Report(true, $"已复制 {paths.Count} 个路径（引号列表）");
+    }
+
     // ─────────────── 结果表（平铺单表 + 可调列 + 列排序）───────────────
 
     /// <summary>当前显示的行：已排序、已按 <see cref="MaxRows"/> 截断。</summary>
@@ -283,6 +324,9 @@ public sealed partial class SearchSessionViewModel : ObservableObject
 
     /// <summary>列表最多显示多少行。来自设置（<c>search.maxRows</c>）。</summary>
     public int MaxRows { get; set; } = SearchSettings.DefaultMaxRows;
+
+    /// <summary>多选压缩的设置（落点 / 命名模板 / 完成后是否定位）。由 App 从 settings.json 注入。</summary>
+    public ArchiveSettings Archive { get; set; } = new();
 
     /// <summary>列定义（含隐藏列）。顺序 = 显示顺序，可拖宽、可点排序、可勾选显隐。</summary>
     public ObservableCollection<ResultColumnViewModel> Columns { get; } = [];

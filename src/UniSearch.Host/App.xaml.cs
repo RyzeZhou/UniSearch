@@ -93,6 +93,7 @@ public partial class App : Application
             ShellMenu = _shellMenu = new ShellContextMenu(),
             IsPreviewOpen = settings.Preview.OpenByDefault,
             MaxRows = settings.Search.MaxRows,
+            Archive = settings.Archive,
         };
         // 列布局（列宽/顺序/可见列/排序）来自设置；默认来源集合决定"输入时自动搜哪些后端"
         vm.ApplyLayout(settings.Columns);

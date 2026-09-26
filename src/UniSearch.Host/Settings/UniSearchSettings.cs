@@ -32,6 +32,9 @@ public sealed class UniSearchSettings
     /// <summary>结果表的列布局（列宽/可见列/顺序/排序）。</summary>
     public ColumnsSettings Columns { get; set; } = new();
 
+    /// <summary>多选批量动作（第 12 轮）：压缩包放哪、怎么命名、完成后是否定位。</summary>
+    public ArchiveSettings Archive { get; set; } = new();
+
     /// <summary>按 Provider id 分节；Provider 通过 <c>IProviderRuntime.Settings</c> 读自己那一节。</summary>
     public Dictionary<string, ProviderSettings> Providers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -51,11 +54,13 @@ public sealed class UniSearchSettings
         Preview ??= new PreviewSettings();
         Window ??= new WindowSettings();
         Columns ??= new ColumnsSettings();
+        Archive ??= new ArchiveSettings();
         Providers ??= new(StringComparer.OrdinalIgnoreCase);
 
         Hotkeys.Normalize();
         Search.Normalize();
         Columns.Normalize();
+        Archive.Normalize();
         Version = CurrentVersion;
     }
 
@@ -306,5 +311,35 @@ public static class Gestures
             return Converter.ConvertToInvariantString(new System.Windows.Input.KeyGesture(key, mods));
         }
         catch { return null; }
+    }
+}
+
+/// <summary>
+/// 多选压缩的设置（第 12 轮）。默认值刻意保守且可预期：包放"第一个选中项所在目录"、
+/// 名字带时间戳、完成后在资源管理器里定位 —— 都不打断"选完就压"的顺手感。
+/// <para>
+/// 之所以做成设置而不是写死：落点与命名是最容易"因人和因场景而异"的两件事
+/// （有人要每次都问、有人要固定目录；有人喜欢纯名字、有人要带时间戳）。
+/// </para>
+/// </summary>
+public sealed class ArchiveSettings
+{
+    /// <summary><c>same-as-first</c>（默认：放第一个选中项所在目录）或 <c>ask</c>（每次弹保存对话框）。</summary>
+    public string Destination { get; set; } = "same-as-first";
+
+    /// <summary>包名模板。变量：<c>{parent}</c> <c>{count}</c> <c>{yyyyMMdd-HHmm}</c> <c>{yyyyMMdd}</c>。</summary>
+    public string NameTemplate { get; set; } = "{parent}-{count}项-{yyyyMMdd-HHmm}";
+
+    /// <summary>压缩完成后在资源管理器里定位这个包（关掉就只是静默完成）。</summary>
+    public bool RevealAfter { get; set; } = true;
+
+    /// <summary>一次最多压多少项（超过先提示，防手滑压 500 个）。<c>0</c> = 不限制。</summary>
+    public int MaxItems { get; set; } = 200;
+
+    public void Normalize()
+    {
+        if (Destination is not ("ask" or "same-as-first")) Destination = "same-as-first";
+        if (string.IsNullOrWhiteSpace(NameTemplate)) NameTemplate = "{parent}-{count}项-{yyyyMMdd-HHmm}";
+        if (MaxItems < 0) MaxItems = 0;
     }
 }

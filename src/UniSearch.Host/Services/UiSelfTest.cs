@@ -716,6 +716,21 @@ public static class UiSelfTest
         log.Info("selftest", $"复制 {vm.SelectionCount} 个路径 -> 剪贴板 {clipLines} 行（期望 {pathCount}）");
         ok &= clipLines == pathCount;
 
+        // ④b 引号列表口径（粘到命令行当参数用）+ 压缩设置项存在且合法
+        vm.CopySelectedPathsQuoted();
+        var quoted = SafeClipboard() ?? "";
+        var quoteCount = quoted.Count(c => c == '"');
+        log.Info("selftest", $"复制为引号列表 -> 引号数 {quoteCount}（期望 {pathCount * 2}）");
+        ok &= quoteCount == pathCount * 2;
+
+        var arch = vm.Archive;
+        var archOk = !string.IsNullOrWhiteSpace(arch.NameTemplate)
+                     && arch.Destination is "ask" or "same-as-first"
+                     && arch.MaxItems >= 0;
+        log.Info("selftest", $"压缩设置：落点={arch.Destination} 模板=[{arch.NameTemplate}] " +
+                             $"完成后定位={arch.RevealAfter} 上限={arch.MaxItems}");
+        ok &= archOk;
+
         // ⑤ 清空：Esc 的语义（先取消选择，窗口还在）
         vm.SyncSelection(Array.Empty<ResultItemViewModel>());
         var clearOk = vm.SelectionCount == 0 && !vm.HasMultiSelection && vm.SelectionSummary is null;
