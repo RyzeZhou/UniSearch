@@ -483,6 +483,9 @@ public partial class App : Application
                     if (!RenderDump.RunVisual(dlg.DumpContent, dumpSettingsTo!))
                         RenderDump.Run(dlg, dumpSettingsTo!);
                     log.Info("host", $"设置窗口离屏渲染完成 -> {dumpSettingsTo}");
+                    // 图之外再报一遍关键控件的值：截图可能因渲染时机而空白，
+                    // 但"控件在不在、绑定生效没有"这件事必须能断言
+                    log.Info("selftest", $"设置窗压缩节：{dlg.ArchiveSectionSummary}");
                 }
                 catch (Exception ex) { log.Error("host", "设置窗口渲染失败", ex); }
                 dlg.Close();

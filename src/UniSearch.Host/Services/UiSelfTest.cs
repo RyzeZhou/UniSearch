@@ -403,6 +403,11 @@ public static class UiSelfTest
         probe.Columns.SortDescending = true;
         probe.Columns.Widths["name"] = 333;
         probe.Columns.Visible = ["name", "path", "size"];
+        // 压缩设置也走一遍往返（第 12 轮新增的节）
+        probe.Archive.Destination = "ask";
+        probe.Archive.NameTemplate = "自检-{count}";
+        probe.Archive.MaxItems = 7;
+        probe.Archive.RevealAfter = false;
 
         var saved = store.Save(probe);
         var reread = new SettingsStore(Path.GetDirectoryName(store.FilePath)!, log).Current;
@@ -411,6 +416,9 @@ public static class UiSelfTest
         log.Info("selftest", $"往返读回 列布局：排序={reread.Columns.SortKey}{(reread.Columns.SortDescending ? "↓" : "↑")}（期望 size↓） "
                              + $"name 列宽={reread.Columns.Widths.GetValueOrDefault("name")}（期望 333） "
                              + $"可见列=[{string.Join(",", reread.Columns.Visible)}]（期望 name,path,size）");
+        log.Info("selftest", $"往返读回 压缩：落点=[{reread.Archive.Destination}]（期望 ask） "
+                             + $"模板=[{reread.Archive.NameTemplate}]（期望 自检-{{count}}） "
+                             + $"上限={reread.Archive.MaxItems}（期望 7） 完成后定位={reread.Archive.RevealAfter}（期望 False）");
 
         // 还原成自检前的值：自检不该改用户的设置
         store.Save(s);

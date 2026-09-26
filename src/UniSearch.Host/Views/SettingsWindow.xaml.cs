@@ -51,11 +51,18 @@ public partial class SettingsWindow : Window
     /// </summary>
     internal FrameworkElement DumpContent => SettingsContent;
 
+    /// <summary>自检用：压缩节几个控件的当前值 —— 证明 XAML 加载、绑定与 <see cref="LoadDraftIntoForm"/> 都生效。</summary>
+    internal string ArchiveSectionSummary =>
+        $"模板=[{ArchiveTemplateBox.Text}] 上限=[{ArchiveMaxItemsBox.Text}] " +
+        $"落点=[{_draft.Archive.Destination}] 完成后定位={_draft.Archive.RevealAfter}";
+
     void LoadDraftIntoForm()
     {
         MaxRowsBox.Text = _draft.Search.MaxRows.ToString();
         AutoProvidersBox.Text = string.Join(", ", _draft.Search.AutoSearchProviders);
         ExtraExcludeBox.Text = string.Join(Environment.NewLine, _draft.Search.ExtraExcludePaths);
+        ArchiveTemplateBox.Text = _draft.Archive.NameTemplate;
+        ArchiveMaxItemsBox.Text = _draft.Archive.MaxItems.ToString();
         UpdateColumnsHint();
 
         UpdateHotkeyFieldsEnabled();
@@ -156,6 +163,9 @@ public partial class SettingsWindow : Window
             .Select(s => s.ToLowerInvariant())
             .ToList();
 
+        // 包名模板是文本，交给 Normalize 兜空值（清空 = 回落默认模板）
+        _draft.Archive.NameTemplate = ArchiveTemplateBox.Text.Trim();
+
         // 两个热键撞车要拦住：注册第二个必然失败，与其让用户看"被占用"，不如直接说清楚
         if (_draft.Hotkeys.Enabled
             && _draft.Hotkeys.Summon.Length > 0
@@ -175,6 +185,8 @@ public partial class SettingsWindow : Window
     {
         if (!TryReadInt(MaxRowsBox.Text, "列表行数上限", 20, 20000, out var maxRows, out error)) return false;
         _draft.Search.MaxRows = maxRows;
+        if (!TryReadInt(ArchiveMaxItemsBox.Text, "压缩项数上限", 0, 100000, out var maxItems, out error)) return false;
+        _draft.Archive.MaxItems = maxItems;
         return true;
     }
 
@@ -200,6 +212,7 @@ public partial class SettingsWindow : Window
         _draft.Preview = d.Preview;
         _draft.Window = d.Window;
         _draft.Columns = d.Columns;
+        _draft.Archive = d.Archive;
         ColumnsEdited = true;
 
         DataContext = null;

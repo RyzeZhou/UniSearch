@@ -177,6 +177,32 @@
                 </Border>
 
                 <!-- ── 预览 ──────────────────────────────── -->
+                <!-- ── 多选与压缩 ────────────────────────── -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="多选与压缩"/>
+                        <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap"
+                                   Text="结果表里 Ctrl / Shift 点选多行，右键即出批量动作（压缩为 ZIP、复制路径、复制为引号列表…）。Esc 先取消选择，再按一次才收起窗口。"/>
+                        <TextBlock Text="压缩包放在" Margin="0,10,0,2"/>
+                        <ComboBox Width="320" HorizontalAlignment="Left"
+                                  SelectedValue="{Binding Archive.Destination, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="第一个选中项所在目录（最顺手）" Tag="same-as-first"/>
+                            <ComboBoxItem Content="每次询问保存位置" Tag="ask"/>
+                        </ComboBox>
+                        <TextBlock Text="包名模板" Margin="0,10,0,2"/>
+                        <TextBox x:Name="ArchiveTemplateBox" Width="320" HorizontalAlignment="Left"/>
+                        <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap"
+                                   Text="可用变量：{parent} 目录名 · {count} 项数 · {yyyyMMdd-HHmm} 时间戳 · {yyyyMMdd} 日期。非法字符会自动换成下划线。"/>
+                        <CheckBox Content="压缩完成后在资源管理器里定位这个包"
+                                  IsChecked="{Binding Archive.RevealAfter, Mode=TwoWay}"/>
+                        <TextBlock Text="一次最多压缩多少项（0 = 不限制）" Margin="0,10,0,2"/>
+                        <TextBox x:Name="ArchiveMaxItemsBox" Width="80" HorizontalAlignment="Left"/>
+                        <TextBlock Style="{StaticResource Hint}"
+                                   Text="超过上限会先提示，防手滑一次压 500 个。"/>
+                    </StackPanel>
+                </Border>
+
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
                         <TextBlock Style="{StaticResource SectionHeader}" Text="预览"/>
