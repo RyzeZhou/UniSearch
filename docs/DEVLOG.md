@@ -1233,6 +1233,73 @@ Thumb / ScrollBar 自己的拖动全部失效。用户看到的就是"滑块和�
 列宽是用户自己的布局，拖列头或"恢复默认列布局"即可；是否按 9pt 重算一版默认列宽，等用户定。
 
 ---
+## 2026-09-26 第 12 轮（结果多选 + 批量动作：压缩为 ZIP）
+
+### 本轮目标（用户原话）
+
+> 多选很需要，搜索出结果有可能多选然后压缩文件的。
+
+### 状态总览
+
+| # | 事项 | 状态 | 验证方式 |
+|---|---|---|---|
+| 1 | 结果表多选（Ctrl/Shift 点击、Ctrl+A、Esc 先清选择） | ✅ | `--selftest-multiselect` 三态断言 |
+| 2 | 多选右键分发（保住整份选择 / 未选中则重置单选） | ✅ | `DecideRightClick` 纯函数断言 |
+| 3 | 批量动作：**压缩为 ZIP** | ✅ | 单测 12 条 + `--selftest-archive` 真压回读 |
+| 4 | 批量动作：复制 N 个路径 / 引号列表 / 名称 / 终端 | ✅ | 剪贴板行数与引号数断言 |
+| 5 | 压缩设置项 + 设置窗「多选与压缩」节 | ✅ | `--selftest-settings` 往返 + 控件值日志 |
+| 6 | 路 B PoC：跨目录多选走原生 shell 菜单 | ❌ **不可行** | `--selftest-shellmenu-multi`（系统返回 `E_FAIL`） |
+
+### 已完成并验证
+
+细节见 `tmp\UniSearch\worklog-第12轮.md`；提交：`243779a`（多选 UI）、`42ccca6`（右键分发）、
+`218276a`（压缩）、`38009e0`（设置项）、`8cf3b76`（设置窗）、`2978338`（PoC）。
+
+- **多选模型**：`Selected` 语义**不变**（= 多选里的第一个），新增
+  `SelectedItems / SelectionCount / HasMultiSelection / SelectionSummary`；因此预览、快捷键、
+  单选右键那套零改动。`SelectionMode=Extended`；**Esc 先取消选择、再按一次才收窗口**。
+- **压缩**：`Core.Archiving.ArchivePlanner`（包名模板 `{parent}-{count}项-{yyyyMMdd-HHmm}`、
+  重名自动加 ` (2)`、zip 条目名规划：同名冲突 → `父目录名/文件名` → 计数兜底，分隔符统一 `/`，
+  **绝不静默覆盖**）+ `Host.Services.ArchiveService`（目录递归、空目录写 `/` 条目、失败清单）。
+  批量菜单首位「压缩为 ZIP(&Z)…」：落点 = 第一个选中项所在目录，后台线程压缩，完成后状态条报条目数
+  并在资源管理器里定位。
+- **设置**：`archive.destination`（`same-as-first` / `ask`）、`archive.nameTemplate`、
+  `archive.revealAfter`、`archive.maxItems`（默认 200，防手滑），设置窗新增「多选与压缩」节。
+- **单测**：**106/106**（原 94 + `ArchivePlannerTests` 12 条）。
+
+### 未完成 / 下次从这里继续
+
+- **同目录多选改走原生 shell 菜单**（PoC 已证明**可行**：同目录多选实测拿到 4 个动词）——
+  能白拿 Win11 的「压缩为 ZIP 文件」与 7-Zip 等第三方动词。跨目录不行（系统 `E_FAIL`），
+  所以只能是"同一目录时走原生、否则走我们自己的批量动作"。
+- **真实鼠标手势仍需人手确认**：Ctrl/Shift 点选、右键批量菜单、压缩落点与结果。
+- `--dump-settings` 这次拍出空白图（控件值日志正常）—— 疑与本会话没有显示设备有关，下次有显示时重拍。
+- 分类专属右键项（原 B3）与 `actions.json` 外置**还没做**：本轮只做了"多选 + 压缩"这条主线。
+
+### 新踩的坑
+
+1. **残留的旧 UniSearch 进程会让 `--selftest-*` 静默不跑**：单实例机制把新进程的启动"唤醒"给已在运行的
+   实例，新进程 `exit=0`、日志不新增 —— 现象是"自检跑了但什么都没输出"。
+   **跑自检前先 `Get-Process UniSearch | Stop-Process -Force`。**
+2. **`edit` 吞掉注释行的行尾换行，会把下一行代码并进注释**：C# 不报错（整行都是注释），
+   只有断言失败才暴露（现象："清空：count=3"）。改注释行别把换行一起删掉。
+3. **屏幕坐标两套 API 要求相反**：`TrackPopupMenuEx`（shell 菜单）只认**物理像素**；
+   WPF `ContextMenu.Placement=AbsolutePoint` 用 **DIP** —— 175% 缩放下不换算就偏出去一大截。
+4. **`IShellItemArray.BindToHandler`（非泛型）抛 `InvalidCastException`**：它内部走
+   `Marshal.GetObjectForIUnknown`，对不支持 IDispatch 的接口不适用；要用 Vanara 的泛型扩展
+   `Shell32.BindToHandler<T>(array, null, BHID…)`。另外 Vanara 的 `Shell32.BHID` 常量**不是 `Guid`**，
+   不能直接当 `in Guid` 传。
+5. 日志实际写在 `%LOCALAPPDATA%\UniSearch\host.log`（`spec\MVP.md` 的 F5 原写 `logs\` 子目录，本轮订正）。
+
+### 验证手段变化
+
+- 新增 `--selftest-multiselect`：选择模型三态 + 右键落点决策 + 批量菜单项 + 剪贴板行数/引号数 + 压缩设置合法性；
+- 新增 `--selftest-archive`：造小树 → 真压 → 读回核对条目名与内容；
+- 新增 `--selftest-shellmenu-multi`：跨目录多选的原生菜单 PoC（只列动词不弹菜单）；
+- `--selftest-settings` 增加压缩节的往返断言；`--dump-settings` 增加控件值日志（截图之外的可断言证据）。
+
+---
+
 ## 模板（下次追加）
 
 ```markdown

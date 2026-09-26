@@ -54,6 +54,8 @@
 | D8 | 中文路径/查询正常（编码、排序、省略号截断） | 搜"会议纪要"、路径含中文与空格 |
 | D9 | Tab 补全（typeahead）可用 | 输入 `trans` 按 Tab 补成候选 |
 | D10 | 结果表可横向滚动：`Shift` + 滚轮（内容比视口宽时） | `--selftest-layout` 的 `ProbeHorizontalScroll`；UI-SPEC 快捷键表 |
+| D11 | **多选**：`Ctrl`/`Shift` 点击、`Ctrl+A`；状态条报"已选 N 项 · 合计 X"，预览给汇总而非某一行；多选时 `Esc` **先取消选择**（再按才收窗口）；右键落在已选中行保住选择、落在未选中行重置单选 | `--selftest-multiselect`（单选/多选/清空三态 + 右键落点决策断言） |
+| D12 | **多选压缩为 ZIP**：批量菜单首位；落点 / 命名模板 / 完成后定位 / 项数上限均可配置；zip 内同名条目**不得静默覆盖**（改 `父目录名/文件名`，再冲突退到计数） | 单测 `ArchivePlannerTests`（12 条）+ `--selftest-archive`（造小树 → 真压 → 读回核对条目名与内容） |
 
 ## E. 融合与来源
 
@@ -71,7 +73,7 @@
 | F2 | 纯逻辑测试不依赖任何外部后端即可运行 | 本机没装 Everything 也全绿 ✅（当前 76/76） |
 | F3 | Provider 契约层零 UI/零 Core 依赖 | 检查 csproj 引用方向 |
 | F4 | 所有第三方代码/包有许可证记录 | `LICENSES-THIRD-PARTY.md`（MIT/Apache-2.0 声明齐全；**无许可证的上游一行不抄**） |
-| F5 | 崩溃日志可定位 | `%LOCALAPPDATA%\UniSearch\logs\`，未处理异常落盘 |
+| F5 | 崩溃日志可定位 | `%LOCALAPPDATA%\UniSearch\host.log`（2026-09-26 订正：此前写的是 `logs\` 子目录，实际没有那个目录），未处理异常落盘 |
 
 ## G. 明确不在 MVP 范围内
 
