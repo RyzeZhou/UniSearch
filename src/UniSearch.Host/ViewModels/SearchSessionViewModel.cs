@@ -75,6 +75,70 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         QueuePreview(value);
     }
 
+    // ─────────────── 多选（Ctrl/Shift 点选，2026-09-25 第 12 轮）───────────────
+
+    /// <summary>
+    /// 当前多选集合，由视图的 <c>SelectionChanged</c> 经 <see cref="SyncSelection"/> 灌进来。
+    /// <see cref="Selected"/> 仍是"主选中项 = 第一个"，因此预览、快捷键、单选右键那套
+    /// （真 shell 菜单 + 追加项）的行为一字不变 —— 多选是**加**上来的，不是替换。
+    /// </summary>
+    readonly List<ResultItemViewModel> _selection = [];
+    public IReadOnlyList<ResultItemViewModel> SelectedItems => _selection;
+
+    public int SelectionCount => _selection.Count;
+
+    /// <summary>≥2 项才算多选：1 项时右键必须走原来那条单选路径。</summary>
+    public bool HasMultiSelection => _selection.Count > 1;
+
+    /// <summary>多选汇总文案（状态条与预览区共用）；单选/空选为 null。</summary>
+    public string? SelectionSummary { get; private set; }
+
+    /// <summary>视图选择变化 → 同步进视图模型。传 <c>ListView.SelectedItems</c> 即可。</summary>
+    public void SyncSelection(System.Collections.IEnumerable items)
+    {
+        _selection.Clear();
+        foreach (var o in items)
+            if (o is ResultItemViewModel r) _selection.Add(r);
+
+        // 主选中项 = 第一个：既有代码全部读 Selected，这样它们零改动
+        var first = _selection.Count > 0 ? _selection[0] : null;
+        if (!ReferenceEquals(Selected, first)) Selected = first;
+
+        SelectionSummary = BuildSelectionSummary();
+        OnPropertyChanged(nameof(SelectedItems));
+        OnPropertyChanged(nameof(SelectionCount));
+        OnPropertyChanged(nameof(HasMultiSelection));
+        OnPropertyChanged(nameof(SelectionSummary));
+        OnPropertyChanged(nameof(StatusText));
+        QueuePreview(Selected);
+    }
+
+    /// <summary>已选 N 项 · 合计 X · 含 M 个文件夹。文件夹不计入大小（不知道就是不知道）。</summary>
+    string? BuildSelectionSummary()
+    {
+        if (_selection.Count <= 1) return null;
+
+        long bytes = 0;
+        int sized = 0, folders = 0;
+        foreach (var r in _selection)
+        {
+            if (r.Source.IsFolder) { folders++; continue; }
+            if (r.Source.SizeBytes is { } s) { bytes += s; sized++; }
+        }
+
+        var parts = new List<string> { $"已选 {_selection.Count} 项" };
+        if (sized > 0) parts.Add($"合计 {Formatting.HumanSize(bytes)}");
+        if (folders > 0) parts.Add($"含 {folders} 个文件夹");
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>多选里的全部本地路径（批量动作用；跳过没有真实路径的实体，如将来的 Zotero 条目）。</summary>
+    public IReadOnlyList<string> SelectedPaths()
+        => _selection.Select(r => r.Source.Path)
+                     .Where(p => !string.IsNullOrEmpty(p))
+                     .Select(p => p!)
+                     .ToList();
+
     // ─────────────── 结果表（平铺单表 + 可调列 + 列排序）───────────────
 
     /// <summary>当前显示的行：已排序、已按 <see cref="MaxRows"/> 截断。</summary>
@@ -404,7 +468,21 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         var mine = new CancellationTokenSource();
         Interlocked.Exchange(ref _previewRun, mine)?.Cancel();
 
-        if (row is null || Preview is null || !IsPreviewOpen)
+        if (Preview is null || !IsPreviewOpen)
+        {
+            PreviewContent = UniSearch.Host.Services.PreviewResult.None;
+            return;
+        }
+
+        // 多选：不预览"最后一个被点中的那一项"（会让人以为只选了它），改给汇总
+        if (HasMultiSelection)
+        {
+            PreviewContent = new UniSearch.Host.Services.PreviewResult(
+                UniSearch.Host.Services.PreviewKind.None, null, null, SelectionSummary);
+            return;
+        }
+
+        if (row is null)
         {
             PreviewContent = UniSearch.Host.Services.PreviewResult.None;
             return;
@@ -475,6 +553,9 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             if (IsBusy) return "搜索中…";
             if (!string.IsNullOrEmpty(ActionFeedback)) return ActionFeedback!;
             if (!string.IsNullOrEmpty(SyntaxNotice)) return SyntaxNotice!;
+            // 多选：此刻用户关心的是"我选了几个"，压过结果规模那行
+            if (HasMultiSelection && !string.IsNullOrEmpty(SelectionSummary))
+                return $"{SelectionSummary}。右键批量操作 · Esc 取消选择";
 
             var shown = Rows.Count;
             var total = _fused.Count;

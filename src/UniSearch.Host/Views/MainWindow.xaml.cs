@@ -667,7 +667,8 @@ public partial class MainWindow : Window
     void OnResultSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (DataContext is not SearchSessionViewModel vm || vm.IsRebuildingRows) return;
-        vm.Selected = ResultList.SelectedItem as ResultItemViewModel;
+        // 多选（Extended）：整份选中集合交给视图模型；主选中项 = 第一个，单选语义不变
+        vm.SyncSelection(ResultList.SelectedItems);
     }
 
     /// <summary>本窗口是否由我们把右键转成了 shell 菜单（用于同时吞掉 Up，避免 WPF 菜单也弹出来）。</summary>
@@ -768,6 +769,13 @@ public partial class MainWindow : Window
                 Vm.SelectNextCategory(); return true;   // Tab = 下一个分类（框内有补全候选时先补全）
 
             case Key.Escape:
+                // 多选时 Esc 先"取消选择"，再按一次才收窗口 ——
+                // 否则选了一堆想反悔，一按 Esc 整个窗口就没了，得重新呼出重新搜
+                if (ResultList.SelectedItems.Count > 1)
+                {
+                    ResultList.SelectedItems.Clear();
+                    return true;
+                }
                 Hide(); return true;
 
             case Key.C:

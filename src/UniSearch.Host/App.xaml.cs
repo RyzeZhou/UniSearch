@@ -241,6 +241,22 @@ public partial class App : Application
             return;
         }
 
+        // --selftest-multiselect：多选模型（计数 / 主选中项 / 汇总 / 状态条 / 路径收集）。
+        // 真实 Ctrl+点击 要人手（合成鼠标被 UIPI 拦），这里验的是选择模型本身。配合 --query 用。
+        if (e.Args.Contains("--selftest-multiselect", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                try { UiSelfTest.RunMultiSelect(vm, log); }
+                catch (Exception ex) { log.Error("selftest", "多选自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
         // --selftest-filters：核对 filters.json 的加载与问题，以及"筛选器 → 查询串"的翻译。
         if (e.Args.Contains("--selftest-filters", StringComparer.OrdinalIgnoreCase))
         {

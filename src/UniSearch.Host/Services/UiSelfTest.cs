@@ -655,4 +655,54 @@ public static class UiSelfTest
         }
         return false;
     }
+
+    /// <summary>
+    /// 多选自检（2026-09-25 第 12 轮）：直接喂选中集合给视图模型，断言
+    /// 单选 / 多选 / 清空三种状态下 —— 计数、主选中项、汇总文案、状态条、路径收集。
+    /// 真实 Ctrl/Shift 点击需要人手（合成鼠标会被 UIPI 拦），这里验的是"选择模型"本身。
+    /// 配合 <c>--query</c> 用：没有结果就没有可选的行。
+    /// </summary>
+    public static void RunMultiSelect(SearchSessionViewModel vm, IUniSearchLog log)
+    {
+        if (vm.Rows.Count < 3)
+        {
+            log.Warn("selftest", $"多选自检需要至少 3 行结果，当前 {vm.Rows.Count} 行 —— 跳过");
+            return;
+        }
+
+        var three = vm.Rows.Take(3).ToList();
+        bool ok = true;
+
+        // ① 单选：与改造前完全一致（无汇总、非多选）
+        vm.SyncSelection(new[] { three[0] });
+        var singleOk = vm.SelectionCount == 1 && !vm.HasMultiSelection && vm.SelectionSummary is null
+                       && ReferenceEquals(vm.Selected, three[0]);
+        log.Info("selftest", $"单选：count={vm.SelectionCount} multi={vm.HasMultiSelection} " +
+                             $"summary={vm.SelectionSummary ?? "null"} 主选中={vm.Selected?.Title}");
+        ok &= singleOk;
+
+        // ② 多选：主选中项必须是第一个（既有单选语义不能漂）
+        vm.SyncSelection(three);
+        var paths = vm.SelectedPaths();
+        var multiOk = vm.SelectionCount == 3 && vm.HasMultiSelection
+                      && ReferenceEquals(vm.Selected, three[0])
+                      && vm.StatusText.Contains("已选 3 项", StringComparison.Ordinal);
+        log.Info("selftest", $"多选：count={vm.SelectionCount} multi={vm.HasMultiSelection} " +
+                             $"主选中={vm.Selected?.Title}（期望第一行）汇总={vm.SelectionSummary}");
+        log.Info("selftest", $"  状态条: {vm.StatusText}");
+        log.Info("selftest", $"  路径收集: {paths.Count} 条（有真实路径的才收）" +
+                             $"{(paths.Count > 0 ? " 例：" + paths[0] : "")}");
+        ok &= multiOk;
+
+        // ③ 清空：Esc 的语义（先取消选择，窗口还在）
+        vm.SyncSelection(Array.Empty<ResultItemViewModel>());
+        var clearOk = vm.SelectionCount == 0 && !vm.HasMultiSelection && vm.SelectionSummary is null;
+        log.Info("selftest", $"清空：count={vm.SelectionCount} multi={vm.HasMultiSelection} " +
+                             $"summary={vm.SelectionSummary ?? "null"}");
+        ok &= clearOk;
+
+        // 收尾：回到单选第一行，别把窗口留在"无选中"状态
+        vm.SyncSelection(new[] { three[0] });
+        log.Info("selftest", ok ? "多选自检：全部通过 ✓" : "多选自检：有失败 ✗");
+    }
 }
