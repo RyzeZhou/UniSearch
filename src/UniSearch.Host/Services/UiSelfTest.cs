@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using UniSearch.Core.Archiving;
 using UniSearch.Core.Categories;
 using UniSearch.Host.Settings;
 using UniSearch.Host.ViewModels;
@@ -725,5 +726,73 @@ public static class UiSelfTest
         // 收尾：回到单选第一行，别把窗口留在"无选中"状态
         vm.SyncSelection(new[] { three[0] });
         log.Info("selftest", ok ? "多选自检：全部通过 ✓" : "多选自检：有失败 ✗");
+    }
+
+    /// <summary>
+    /// 压缩自检（第 12 轮阶段 3）：造一个含"同名文件 + 中文名 + 子目录"的小树，走**真实**的
+    /// 规划与压缩，再把 zip 读回来核对条目名与内容。
+    /// <para>
+    /// 为什么不走 <c>vm.ArchiveSelectedAsZip()</c>：那需要选中"搜索结果里的行"，会往用户的搜索目录里
+    /// 写 zip（副作用）。这里验的是压缩引擎与规划这一层，VM 那层只是把两者接起来。
+    /// </para>
+    /// </summary>
+    public static void RunArchive(IUniSearchLog log)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "unisearch-archive-selftest");
+        try
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            Directory.CreateDirectory(Path.Combine(root, "甲"));
+            Directory.CreateDirectory(Path.Combine(root, "乙"));
+            File.WriteAllText(Path.Combine(root, "甲", "同名.txt"), "AAA");
+            File.WriteAllText(Path.Combine(root, "乙", "同名.txt"), "BBB");
+            File.WriteAllText(Path.Combine(root, "根文件.txt"), "CCC");
+
+            var paths = new[]
+            {
+                Path.Combine(root, "甲", "同名.txt"),
+                Path.Combine(root, "乙", "同名.txt"),
+                Path.Combine(root, "根文件.txt"),
+            };
+
+            var plan = ArchivePlanner.PlanEntries(paths);
+            log.Info("selftest", "压缩规划：" +
+                string.Join(" | ", plan.Select(p => $"{Path.GetFileName(p.Source)} -> {p.Entry}")));
+
+            var zipPath = Path.Combine(root, "测试包.zip");
+            var (added, failures) = ArchiveService.CreateZip(plan, zipPath);
+            var size = File.Exists(zipPath) ? new FileInfo(zipPath).Length : -1;
+            log.Info("selftest", $"真压：added={added} failures={failures.Count} exists={File.Exists(zipPath)} size={size}B");
+
+            using var zip = System.IO.Compression.ZipFile.OpenRead(zipPath);
+            var entries = zip.Entries.Select(e => e.FullName).ToList();
+            log.Info("selftest", $"读回条目：{string.Join(" | ", entries)}");
+
+            string ReadEntry(string name)
+            {
+                var e = zip.Entries.FirstOrDefault(x => x.FullName == name);
+                if (e is null) return "<缺>";
+                using var s = e.Open();
+                using var r = new StreamReader(s);
+                return r.ReadToEnd();
+            }
+
+            var first = ReadEntry("同名.txt");
+            var second = ReadEntry("乙/同名.txt");
+            var third = ReadEntry("根文件.txt");
+            log.Info("selftest", $"内容核对：同名.txt=[{first}]（期望 AAA）· 乙/同名.txt=[{second}]（期望 BBB）· 根文件.txt=[{third}]（期望 CCC）");
+
+            var ok = added == 3 && failures.Count == 0
+                     && first == "AAA" && second == "BBB" && third == "CCC";
+            log.Info("selftest", ok ? "压缩自检：全部通过 ✓" : "压缩自检：有失败 ✗");
+        }
+        catch (Exception ex)
+        {
+            log.Error("selftest", "压缩自检异常", ex);
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+        }
     }
 }

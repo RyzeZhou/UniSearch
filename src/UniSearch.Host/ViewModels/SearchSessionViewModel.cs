@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using UniSearch.Core.Archiving;
 using UniSearch.Core.Broker;
 using UniSearch.Core.Categories;
 using UniSearch.Core.Filters;
@@ -153,15 +154,17 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         => rowAlreadySelected && selectedCount > 1 ? RightClickDecision.KeepSelection
                                                    : RightClickDecision.ResetToRow;
 
+    const uint BatchArchive = 0x8100;
     const uint BatchCopyPaths = 0x8101;
     const uint BatchCopyNames = 0x8102;
     const uint BatchConsole = 0x8103;
 
     /// <summary>批量菜单的项（id, 标签），顺序即显示顺序。
-    /// 阶段 3 会把「压缩为 ZIP」插到最前（它是这条需求的正主）。</summary>
+    /// 「压缩为 ZIP」排第一 —— 它是这条需求的正主（"多选然后压缩文件"）。</summary>
     internal static IReadOnlyList<(uint Id, string Label)> BuildBatchMenuItems(int count)
         => new List<(uint, string)>
         {
+            (BatchArchive, "压缩为 ZIP(&Z)…"),
             (BatchCopyPaths, $"复制 {count} 个路径(&C)"),
             (BatchCopyNames, $"复制 {count} 个名称(&N)"),
             (BatchConsole, "在终端中打开(&T)"),
@@ -172,11 +175,80 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     {
         switch (id)
         {
+            case BatchArchive: ArchiveSelectedAsZip(); return true;
             case BatchCopyPaths: CopySelectedPaths(); return true;
             case BatchCopyNames: CopySelectedNames(); return true;
             case BatchConsole: OpenInConsoleSelected(); return true;   // 取主选中项所在目录
         }
         return false;
+    }
+
+    /// <summary>
+    /// 把多选压成一个 zip（第 12 轮的核心需求："多选然后压缩文件"）。
+    /// <para>
+    /// 包放**第一个选中项所在目录**，命名走 <c>ArchivePlanner.DefaultNameTemplate</c>
+    /// （<c>{parent}-{count}项-{yyyyMMdd-HHmm}.zip</c>），重名自动加 <c> (2)</c>；
+    /// 压缩在后台线程跑（大目录可能几十秒），完成后状态条报条目数与落点并在资源管理器里定位。
+    /// </para>
+    /// </summary>
+    public void ArchiveSelectedAsZip()
+    {
+        var paths = SelectedPaths();
+        if (paths.Count == 0) { Report(false, "选中的项没有本地路径，无法压缩"); return; }
+
+        var plan = ArchivePlanner.PlanEntries(paths);
+        if (plan.Count == 0) { Report(false, "没有可压缩的条目"); return; }
+
+        var firstDir = Path.GetDirectoryName(paths[0]);
+        if (string.IsNullOrEmpty(firstDir)) firstDir = Environment.CurrentDirectory;
+        var parentName = Path.GetFileName(firstDir.TrimEnd('\\'));
+        var fileName = ArchivePlanner.BuildArchiveName(null, parentName, plan.Count, DateTime.Now) + ".zip";
+        var zipPath = ArchivePlanner.EnsureUniqueFile(firstDir, fileName, File.Exists);
+
+        Report(true, $"正在压缩 {plan.Count} 项…");
+        _log?.Info("archive", $"开始压缩 {plan.Count} 项 -> {zipPath}");
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var (added, failures) = ArchiveService.CreateZip(plan, zipPath);
+                _log?.Info("archive", $"压缩完成 added={added} failed={failures.Count} -> {zipPath}");
+                Post(() =>
+                {
+                    Report(failures.Count == 0,
+                           $"已压缩 {added} 个条目 → {zipPath}",
+                           $"已压缩 {added} 个条目，{failures.Count} 项失败（详见 host.log）");
+                    if (failures.Count > 0) _log?.Warn("archive", string.Join("; ", failures.Take(5)));
+                    RevealPathInExplorer(zipPath);
+                });
+            }
+            catch (Exception ex)
+            {
+                _log?.Error("archive", "压缩失败", ex);
+                Post(() => Report(false, $"压缩失败：{ex.Message}"));
+            }
+        });
+    }
+
+    /// <summary>回到 UI 线程（后台任务写状态条必须经过它，否则绑定会在非 UI 线程上被触发）。</summary>
+    static void Post(Action action)
+    {
+        var app = System.Windows.Application.Current;
+        if (app is null) { action(); return; }
+        app.Dispatcher.BeginInvoke(action);
+    }
+
+    /// <summary>在资源管理器里定位一个文件（压缩完顺手让用户看到包在哪）。</summary>
+    static void RevealPathInExplorer(string path)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch { /* 定位失败不影响压缩结果本身 */ }
     }
 
     /// <summary>复制多选里的全部路径：<b>每行一条</b>（资源管理器"复制"粘贴到别处的常见口径）。</summary>

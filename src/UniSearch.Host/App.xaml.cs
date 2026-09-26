@@ -257,6 +257,21 @@ public partial class App : Application
             return;
         }
 
+        // --selftest-archive：压缩自检（造小树 → 真压 → 读回核对条目名与内容）。不需要 --query。
+        if (e.Args.Contains("--selftest-archive", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                try { UiSelfTest.RunArchive(log); }
+                catch (Exception ex) { log.Error("selftest", "压缩自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
         // --selftest-filters：核对 filters.json 的加载与问题，以及"筛选器 → 查询串"的翻译。
         if (e.Args.Contains("--selftest-filters", StringComparer.OrdinalIgnoreCase))
         {
