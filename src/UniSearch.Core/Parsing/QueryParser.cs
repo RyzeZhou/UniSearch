@@ -132,7 +132,17 @@ public static class QueryParser
     /// </para>
     /// </summary>
     public static SearchQuery WithFilters(SearchQuery q, QueryFilters filters)
-        => q with { ProviderText = Reconstruct(q with { Filters = filters }) };
+    {
+        // ⚠ 两件事都要做，缺一个就会**静默失效**：
+        //   ① 把 Filters 真正写回返回的查询 —— 后端（AnyTXT 读 Filters.Extensions、
+        //      Zotero 读 Filters.Kinds/Subtypes）和 Core 的后过滤都从这里取值；
+        //   ② 重建 ProviderText —— 否则后端拿到的还是没过滤的查询串。
+        // 曾经只做了 ②：`q with { ProviderText = Reconstruct(q with { Filters = filters }) }`
+        // 里那个 `Filters = filters` 只是 Reconstruct 的入参，返回的查询仍是原来那个 ——
+        // 于是**只有读 ProviderText 的 Everything 能用**，AnyTXT/Zotero 点筛选器一律"没反应"。
+        var withFilters = q with { Filters = filters };
+        return withFilters with { ProviderText = Reconstruct(withFilters) };
+    }
 
     static string? PhraseRegexMatch(ref string text)
     {

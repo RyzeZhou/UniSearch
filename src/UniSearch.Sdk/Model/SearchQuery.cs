@@ -82,6 +82,17 @@ public sealed record QueryFilters
     /// <summary>只允许这些结果类型。空 = 不限。</summary>
     public IReadOnlyList<ResultKind> Kinds { get; init; } = [];
 
+    /// <summary>
+    /// 只允许这些语义<b>子</b>类型（<see cref="SearchResult.Subtype"/>，小写连字符：
+    /// <c>journal-article</c>、<c>preprint</c>、<c>attachment</c>…）。空 = 不限。
+    /// <para>
+    /// 为什么和 <see cref="Kinds"/> 并存：Kinds 只有"文献条目"这一档粗粒度，
+    /// 表达不了"只要期刊论文、不要预印本"。能下推的后端（Zotero 的 <c>itemType=</c>）就下推，
+    /// 不能的由 Core 做后过滤。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Subtypes { get; init; } = [];
+
     /// <summary>用户用引号锁定的短语。</summary>
     public string? Phrase { get; init; }
 
@@ -101,7 +112,7 @@ public sealed record QueryFilters
     public string? ExplicitDirectory { get; init; }
 
     public bool IsEmpty =>
-        Extensions.Count == 0 && Kinds.Count == 0 && Phrase is null && !FoldersOnly &&
+        Extensions.Count == 0 && Kinds.Count == 0 && Subtypes.Count == 0 && Phrase is null && !FoldersOnly &&
         !RegexRequested && MinSizeBytes is null && MaxSizeBytes is null && ModifiedAfter is null &&
         ExplicitDirectory is null;
 }

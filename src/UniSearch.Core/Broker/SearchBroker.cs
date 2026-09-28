@@ -203,6 +203,11 @@ public sealed class SearchBroker : IDisposable
 
             if (q.Filters.Kinds.Count > 0 && !q.Filters.Kinds.Contains(r.Kind) && r.Kind != ResultKind.Unknown) continue;
 
+            // 子类型：能下推的后端（Zotero 的 itemType=）已经在后端收敛过了，这里兜住不能下推的。
+            if (q.Filters.Subtypes.Count > 0 &&
+                (r.Subtype is not { Length: > 0 } sub ||
+                 !q.Filters.Subtypes.Contains(sub, StringComparer.OrdinalIgnoreCase))) continue;
+
             if (q.Filters.MinSizeBytes is { } min && r.SizeBytes < min) continue;
             if (q.Filters.MaxSizeBytes is { } max && r.SizeBytes > max) continue;
             if (q.Filters.ModifiedAfter is { } after && r.ModifiedAt < after) continue;

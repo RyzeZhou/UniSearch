@@ -181,6 +181,10 @@ public static class AnytxtQueryTranslator
                                                           or ResultKind.Image or ResultKind.Video
                                                           or ResultKind.Audio or ResultKind.Application)))
             notes.Add("该后端只产出文件类结果，类型条件已在前端过滤");
+
+        if (f.Subtypes.Count > 0)
+            // AnyTXT 的结果全是文件，子类型由扩展名决定 —— 没有可下推的条目类型概念。
+            notes.Add("AnyTXT 不按语义子类型筛选，该条件已在前端过滤");
     }
 
     /// <summary>短语定界：值里已有的引号去掉，避免 <c>""x""</c> 这种解析歧义。</summary>

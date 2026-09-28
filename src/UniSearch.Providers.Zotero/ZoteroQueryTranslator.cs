@@ -59,7 +59,7 @@ public static class ZoteroQueryTranslator
             q.Add(new("qmode", opt.Qmode));
         }
 
-        var itemType = MapItemType(query.Filters.Kinds, notes);
+        var itemType = MapItemType(query.Filters.Kinds, query.Filters.Subtypes, notes);
         if (itemType is not null) q.Add(new("itemType", itemType));
 
         q.Add(new("limit", limit.ToString()));
@@ -94,15 +94,24 @@ public static class ZoteroQueryTranslator
     }
 
     /// <summary>
-    /// <see cref="ResultKind"/> → Zotero 的 <c>itemType</c>。
+    /// 条目类型下推。<b>子类型优先</b>：它是精确的（<c>journal-article</c> → <c>journalArticle</c>），
+    /// 而 <see cref="ResultKind"/> 只有"文献条目"这一档粗粒度，只能做近似（翻译成 <c>-attachment</c>）。
     /// <para>
-    /// 只能做<b>近似</b>映射：Zotero 有 40 种条目类型，而我们的 Kind 只有"文献条目"这一档。
-    /// 所以"文献条目"翻译成 <c>-attachment</c>（排除附件，剩下的就是条目本身）——
-    /// 这是能表达出来的最接近的语义，不是精确对应，代码里说清楚。
+    /// 布尔语法是实测过的：多个 <c>itemType=</c> 是 AND、<c>||</c> 是 OR、<c>-</c> 是 NOT。
+    /// 多个子类型用 <c>||</c> 连（"期刊论文或预印本"）。
     /// </para>
     /// </summary>
-    internal static string? MapItemType(IReadOnlyList<ResultKind> kinds, List<string> notes)
+    internal static string? MapItemType(IReadOnlyList<ResultKind> kinds, IReadOnlyList<string> subtypes,
+                                        List<string> notes)
     {
+        // ① 子类型是精确的，优先
+        if (subtypes.Count > 0)
+        {
+            var mapped = subtypes.Select(ToZoteroItemType).Where(s => s.Length > 0).ToList();
+            if (mapped.Count == 1) return mapped[0];
+            if (mapped.Count > 1) return string.Join(" || ", mapped);
+        }
+
         if (kinds.Count == 0) return null;
 
         var wantsNote = kinds.Contains(ResultKind.Note);
@@ -122,6 +131,27 @@ public static class ZoteroQueryTranslator
         // 其它 Kind（文件/图片/视频…）对 Zotero 没有意义 —— 调度阶段本该已经跳过它。
         notes.Add("该后端只产出文献条目，类型条件已在前端过滤");
         return null;
+    }
+
+    /// <summary>
+    /// SDK 的子类型（<c>journal-article</c>）→ Zotero 的 <c>itemType</c>（<c>journalArticle</c>）。
+    /// 与 <c>ZoteroItemMapper.ToSubtype</c> 互为逆运算 —— 那边把后端值转成统一形式，
+    /// 这边把统一形式转回后端值。
+    /// </summary>
+    internal static string ToZoteroItemType(string subtype)
+    {
+        if (string.IsNullOrWhiteSpace(subtype)) return string.Empty;
+        var parts = subtype.Split('-', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return string.Empty;
+
+        var sb = new System.Text.StringBuilder(subtype.Length);
+        sb.Append(parts[0]);
+        for (var i = 1; i < parts.Length; i++)
+        {
+            if (parts[i].Length == 0) continue;
+            sb.Append(char.ToUpperInvariant(parts[i][0])).Append(parts[i][1..]);
+        }
+        return sb.ToString();
     }
 
     /// <summary>把"下推不了"的条件逐条说清楚 —— 静默丢弃会让用户以为筛选生效了。</summary>

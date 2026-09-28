@@ -92,7 +92,7 @@ public class ZoteroProviderTests
     {
         // Zotero 有 40 种条目类型，我们的 Kind 只有"文献条目"一档 —— 只能取最接近的表达。
         var notes = new List<string>();
-        Assert.Equal("-attachment", ZoteroQueryTranslator.MapItemType([ResultKind.BibliographicItem], notes));
+        Assert.Equal("-attachment", ZoteroQueryTranslator.MapItemType([ResultKind.BibliographicItem], [], notes));
         Assert.Empty(notes);
     }
 
@@ -100,13 +100,13 @@ public class ZoteroProviderTests
     [InlineData(ResultKind.Note, "note")]
     [InlineData(ResultKind.Attachment, "attachment")]
     public void MapItemType_maps_the_exact_ones(ResultKind kind, string expected)
-        => Assert.Equal(expected, ZoteroQueryTranslator.MapItemType([kind], []));
+        => Assert.Equal(expected, ZoteroQueryTranslator.MapItemType([kind], [], []));
 
     [Fact]
     public void MapItemType_reports_when_it_has_to_approximate()
     {
         var notes = new List<string>();
-        var mapped = ZoteroQueryTranslator.MapItemType([ResultKind.BibliographicItem, ResultKind.Note], notes);
+        var mapped = ZoteroQueryTranslator.MapItemType([ResultKind.BibliographicItem, ResultKind.Note], [], notes);
 
         Assert.NotNull(mapped);
         Assert.Contains(notes, n => n.Contains("前端过滤"));
@@ -116,8 +116,55 @@ public class ZoteroProviderTests
     public void MapItemType_says_nothing_for_file_like_kinds()
     {
         var notes = new List<string>();
-        Assert.Null(ZoteroQueryTranslator.MapItemType([ResultKind.Image], notes));
+        Assert.Null(ZoteroQueryTranslator.MapItemType([ResultKind.Image], [], notes));
         Assert.Contains(notes, n => n.Contains("只产出文献条目"));
+    }
+
+    [Fact]
+    public void MapItemType_prefers_the_exact_subtype_over_the_approximate_kind()
+    {
+        // 子类型是精确的（journal-article → journalArticle），Kind 只能近似（-attachment）。
+        // 两者同时给出时必须用子类型 —— 否则"只要期刊论文"会退化成"只要不是附件"。
+        var notes = new List<string>();
+        var mapped = ZoteroQueryTranslator.MapItemType([ResultKind.BibliographicItem], ["journal-article"], notes);
+
+        Assert.Equal("journalArticle", mapped);
+        Assert.Empty(notes);
+    }
+
+    [Fact]
+    public void MapItemType_joins_several_subtypes_with_or()
+    {
+        // 多个子类型 = "期刊论文或预印本"，用 Zotero 的 ||（实测有效）
+        var mapped = ZoteroQueryTranslator.MapItemType([], ["journal-article", "preprint"], []);
+        Assert.Equal("journalArticle || preprint", mapped);
+    }
+
+    [Theory]
+    [InlineData("journal-article", "journalArticle")]
+    [InlineData("preprint", "preprint")]
+    [InlineData("book-section", "bookSection")]
+    [InlineData("computer-program", "computerProgram")]
+    [InlineData("attachment", "attachment")]
+    public void ToZoteroItemType_is_the_inverse_of_ToSubtype(string subtype, string expected)
+        => Assert.Equal(expected, ZoteroQueryTranslator.ToZoteroItemType(subtype));
+
+    [Fact]
+    public void Subtype_round_trips_through_both_directions()
+    {
+        // 两处转换必须互逆：映射器把后端值转成统一形式，翻译器再转回后端值。
+        foreach (var zoteroType in new[] { "journalArticle", "bookSection", "computerProgram", "preprint" })
+            Assert.Equal(zoteroType,
+                ZoteroQueryTranslator.ToZoteroItemType(ZoteroItemMapper.ToSubtype(zoteroType)));
+    }
+
+    [Fact]
+    public void Translate_pushes_subtypes_down_as_item_type()
+    {
+        var t = ZoteroQueryTranslator.Translate(
+            Query("x", new QueryFilters { Subtypes = ["journal-article"] }), 10);
+
+        Assert.Equal("journalArticle", t.Request.ItemType);
     }
 
     // ───────────────────────── 如实降级 ─────────────────────────

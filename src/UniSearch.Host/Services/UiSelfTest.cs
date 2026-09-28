@@ -687,6 +687,31 @@ public static class UiSelfTest
         }
     }
 
+    /// <summary>
+    /// 点一个标签并等这次查询真的跑完。
+    /// <para>
+    /// ⚠ <b>不能只等 <c>IsBusy</c></b>：<c>SelectedTabId</c> 的 setter 里是 <c>_ = RunAsync()</c>，
+    /// 从"设了值"到"RunAsync 把 IsBusy 置 true"之间有一瞬间它还是 false —— 那时等它等于没等，
+    /// 读到的还是上一次的行数。表现就是"筛选器明明生效了，自检却说没生效"（实测踩到）。
+    /// 所以先等请求计数往前走，再等它落回空闲。
+    /// </para>
+    /// </summary>
+    static async Task SelectTabAndWaitAsync(SearchSessionViewModel vm, string tabId)
+    {
+        var before = vm.SearchRequestCount;
+        vm.SelectedTabId = tabId;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (vm.SearchRequestCount == before && sw.ElapsedMilliseconds < 2000)
+            await Task.Delay(20).ConfigureAwait(true);
+
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+    }
+
+    /// <summary>行集合的指纹：标题排序后拼起来。用来判断"两个标签的结果是不是同一批"。</summary>
+    static string RowFingerprint(SearchSessionViewModel vm) =>
+        string.Join('\u0001', vm.Rows.Select(r => r.Title).OrderBy(t => t, StringComparer.Ordinal));
+
     /// <summary>等到搜索跑完（IsBusy 落回 false）。最多 5 秒。</summary>
     static async Task WaitForIdleAsync(SearchSessionViewModel vm, int timeoutMs = 5000)
     {
@@ -695,6 +720,73 @@ public static class UiSelfTest
         {
             await Task.Delay(80).ConfigureAwait(true);
             if (!vm.IsBusy) return;
+        }
+    }
+
+    /// <summary>
+    /// 标签有效性自检：<b>把每个后端下的每个标签真的点一遍，报真实行数</b>。
+    /// <para>
+    /// 为什么需要它：标签点下去"没反应"和"生效了但结果一样"从界面上分不出来 ——
+    /// 用户报的"AnyTXT/Zotero 全部以外的筛选无效"就是这么来的。
+    /// 只有逐个点、逐个记行数，才能把"筛选静默失效"和"确实筛到了"分开。
+    /// </para>
+    /// <para>判定：一个标签若与「全部」行数完全相同 <b>且</b> 不是「全部」本身，就是可疑的（SUSPECT）。</para>
+    /// </summary>
+    public static async Task RunTabsAsync(SearchSessionViewModel vm, string query, IUniSearchLog log)
+    {
+        log.Info("selftest", $"=== 标签有效性自检：查询「{query}」 ===");
+
+        var providers = new[] { "everything", "anytxt", "zotero" };
+        var bad = new List<string>();
+
+        foreach (var provider in providers)
+        {
+            vm.Input = query;
+            var beforeSwitch = vm.SearchRequestCount;
+            vm.ActiveSourceId = provider;          // 换来源 → 标签选择会归零（这正是要验的行为之一）
+            var swSwitch = System.Diagnostics.Stopwatch.StartNew();
+            while (vm.SearchRequestCount == beforeSwitch && swSwitch.ElapsedMilliseconds < 2000)
+                await Task.Delay(20).ConfigureAwait(true);
+            await WaitForIdleAsync(vm).ConfigureAwait(true);
+
+            // 换来源必须把标签归零：上一个后端选中的筛选器在新后端多半没有意义
+            var resetOk = vm.SelectedTabId == CategoryIds.All;
+            if (!resetOk) bad.Add($"{provider}: 换来源后标签没归零（停在 {vm.SelectedTabId}）");
+
+            var tabs = vm.Tabs.ToList();
+            log.Info("selftest", $"[{provider}] 标签栏 {tabs.Count} 个：{string.Join(" | ", tabs.Select(t => $"{t.DisplayName}({t.Count})"))}");
+            log.Info("selftest", $"[{provider}] 换来源后标签归零={resetOk}（期望 True）");
+
+            var allRows = vm.Rows.Count;
+            var allPrint = RowFingerprint(vm);
+
+            foreach (var tab in tabs.Where(t => t.Id != CategoryIds.All))
+            {
+                await SelectTabAndWaitAsync(vm, tab.Id).ConfigureAwait(true);
+
+                var rows = vm.Rows.Count;
+                // 判据是"结果**完全相同**"，不是"行数相同" ——
+                // 行数相同完全可能是巧合（比如"期刊论文"恰好也是 16 条，但那 16 条确实是筛出来的）。
+                var sameAsAll = rows == allRows && RowFingerprint(vm) == allPrint;
+                if (sameAsAll && allRows > 0)
+                    bad.Add($"{provider}/{tab.DisplayName}: 结果与「全部」完全相同（{rows} 行），筛选疑似没生效");
+
+                log.Info("selftest", $"[{provider}]   点「{tab.DisplayName}」-> {rows} 行" +
+                                     $"（全部 {allRows}）{(sameAsAll && allRows > 0 ? "  ← SUSPECT" : "")}" +
+                                     $"{(vm.LastFilterLabel is { Length: > 0 } fl ? $" 筛选器={fl}" : "")}");
+            }
+
+            await SelectTabAndWaitAsync(vm, CategoryIds.All).ConfigureAwait(true);
+        }
+
+        vm.ActiveSourceId = null;
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+
+        if (bad.Count == 0) log.Info("selftest", "标签有效性自检：全部通过 ✓");
+        else
+        {
+            log.Warn("selftest", $"标签有效性自检：{bad.Count} 处可疑 ✗");
+            foreach (var b in bad) log.Warn("selftest", "   " + b);
         }
     }
 

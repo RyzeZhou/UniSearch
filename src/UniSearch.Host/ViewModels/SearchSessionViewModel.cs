@@ -495,8 +495,9 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             s.IsActive = string.Equals(s.Id, value, StringComparison.OrdinalIgnoreCase);
         OnPropertyChanged(nameof(SourceLabel));
         OnPropertyChanged(nameof(StatusText));
-        // 换了来源 → 标签栏要按新后端重解析模板（没被钉住时就跟着走）
-        RefreshTemplate(reSearch: false);
+        // 换了来源 → 标签栏要按新后端重解析模板（没被钉住时就跟着走），
+        // 并且把标签选择归零 —— 上一个后端选中的筛选器在新后端多半没有意义。
+        RefreshTemplate(reSearch: false, providerChanged: true);
         _ = RunAsync();
     }
 
@@ -511,7 +512,7 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             s.IsDefaultAuto = AutoSearchProviders.Contains(s.Id, StringComparer.OrdinalIgnoreCase);
         OnPropertyChanged(nameof(SourceLabel));
         // 默认来源集合变了 → "有没有某一个后端"也可能变了，模板要重解析
-        RefreshTemplate(reSearch: false);
+        RefreshTemplate(reSearch: false, providerChanged: true);
     }
 
     /// <summary>本次查询实际要问的后端（null = 不限制，全部合格后端都问）。</summary>
@@ -649,7 +650,14 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     /// 重算当前模板并重建标签栏。<b>不重跑搜索</b> —— 切模板只是"标签栏显示哪几个"，
     /// 结果集与查询串都不变。唯一的例外见下面那段：当前选中的自定义筛选器被新模板藏掉了。
     /// </summary>
-    void RefreshTemplate(bool reSearch)
+    /// <param name="reSearch">重建后是否重跑一次查询。</param>
+    /// <param name="providerChanged">
+    /// 这次重算是不是由"换来源"引起的。是的话<b>把标签选择归零</b>：筛选器本来就是按后端分叉的
+    /// （模板那套正是干这个的），一个后端下选中的分类到了另一个后端多半毫无意义 ——
+    /// Zotero 的「期刊论文」在 Everything 下不存在，AnyTXT 的「正文命中」在 Zotero 下也不存在。
+    /// 留着它只会让人看到一个 0 结果、又说不清为什么的界面。
+    /// </param>
+    void RefreshTemplate(bool reSearch, bool providerChanged = false)
     {
         var pid = TemplateProviderId;
 
@@ -667,11 +675,12 @@ public sealed partial class SearchSessionViewModel : ObservableObject
 
         BuildTabs();
 
-        // 当前选中的自定义筛选器被新模板藏掉了 → 退回「全部」。
-        // 不处理的话标签栏里一个高亮的都没有，但查询串还在按那个筛选器过滤 ——
-        // 用户看到的是"结果莫名其妙少了一大截"，最难查的那种坏法。
-        if (CurrentFilter is not null && Tabs.All(t => t.Id != SelectedTabId))
-            SelectedTabId = CategoryIds.All;   // setter 里会重跑一次
+        // 换来源 → 无条件回「全部」；同一后端下重查 → 只处理"选中的筛选器被藏掉了"这种情况。
+        // 两种都靠 SelectedTabId 的 setter 重跑一次查询（会取消调用方那次，不会出两份结果）。
+        if (providerChanged && SelectedTabId != CategoryIds.All)
+            SelectedTabId = CategoryIds.All;
+        else if (CurrentFilter is not null && Tabs.All(t => t.Id != SelectedTabId))
+            SelectedTabId = CategoryIds.All;
         else if (reSearch)
             _ = RunAsync();
     }
@@ -976,6 +985,10 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             {
                 Extensions = filter.Extensions,
                 Kinds = filter.Kinds.Select(k => Enum.Parse<ResultKind>(k, ignoreCase: true)).ToList(),
+                // ⚠ 三个维度都要带上。少带一个的后果不是报错，是**筛选静默失效** ——
+                // 点「期刊论文」得到和「全部」一样的结果，而没有任何地方能看出是这里漏了
+                // （实测踩到：Zotero 的条目类型筛选器就是这么"点了没用"的）。
+                Subtypes = filter.Subtypes,
             };
             q = UniSearch.Core.Parsing.QueryParser.WithFilters(q, merged);
         }

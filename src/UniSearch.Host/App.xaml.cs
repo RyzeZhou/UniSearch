@@ -383,6 +383,24 @@ public partial class App : Application
             return;
         }
 
+        // --selftest-tabs "<词>"：把每个后端下的每个标签真的点一遍，报真实行数。
+        // 用来把"筛选静默失效"和"确实筛到了"分开 —— 从界面上这两者分不出来。
+        if (e.Args.Contains("--selftest-tabs", StringComparer.OrdinalIgnoreCase))
+        {
+            var probeQuery = ReadOptionValue(e.Args, "--selftest-tabs") ?? ReadInitialQuery(e.Args);
+            if (string.IsNullOrWhiteSpace(probeQuery)) probeQuery = "protein";
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+            timer.Tick += async (_, _) =>
+            {
+                timer.Stop();
+                try { await UiSelfTest.RunTabsAsync(vm, probeQuery, log); }
+                catch (Exception ex) { log.Error("selftest", "标签有效性自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
         // --selftest-keys：直接调快捷键分发函数，核对 Ctrl+J / Ctrl+1..9 / Ctrl+0 真的接上了。
         // 配合 --query 用（没有结果就没有分类标签，测不出东西）。
         if (e.Args.Contains("--selftest-keys", StringComparer.OrdinalIgnoreCase))        {
