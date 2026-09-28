@@ -750,6 +750,107 @@ public class CoreLogicTests
         File.Delete(path);
     }
 
+    // ── 子类型维度（2026-09-28：为 Zotero 的"期刊论文 / 预印本"这类筛选器加的）──
+    // Kind 只有"文献条目"这一档粗粒度，够不着 Zotero 的 40 种条目类型；子类型是后端如实声明的那一层。
+
+    [Fact]
+    public void Filter_matches_by_subtype()
+    {
+        var path = WriteTempJson("""
+        {
+          "filters": [
+            { "id": "zot-journal", "name": "期刊论文", "providers": ["zotero"],
+              "subtypes": ["journal-article"] },
+            { "id": "zot-any", "name": "有 PDF", "providers": ["zotero"],
+              "subtypes": ["attachment", "preprint"] }
+          ]
+        }
+        """);
+
+        var cat = FilterCatalog.Load(path);
+        var journal = cat.Find("zot-journal")!;
+        var any = cat.Find("zot-any")!;
+
+        var article = ZoteroRow("journal-article");
+        var preprint = ZoteroRow("preprint");
+        var pdf = new SearchResult
+        {
+            ProviderId = "zotero", ProviderItemId = "K", Kind = ResultKind.Attachment,
+            Subtype = "attachment", Title = "PDF", Path = P("C:/z/x.pdf"),
+        };
+
+        Assert.True(journal.Matches(article));
+        Assert.False(journal.Matches(preprint));
+        Assert.True(any.Matches(preprint));
+        Assert.True(any.Matches(pdf));
+        Assert.False(any.Matches(article));
+
+        // providers 让它们只在 Zotero 下出现
+        Assert.Equal(["zot-journal", "zot-any"], cat.For(["zotero"]).Select(f => f.Id));
+        Assert.Empty(cat.For(["everything"]));
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void Filter_subtypes_are_lowercased_and_deduped()
+    {
+        var path = WriteTempJson("""
+        {
+          "filters": [
+            { "id": "x", "name": "X", "subtypes": ["  Journal-Article ", "journal-article", "", "PREPRINT"] }
+          ]
+        }
+        """);
+
+        var f = Assert.Single(FilterCatalog.Load(path).All);
+        Assert.Equal(["journal-article", "preprint"], f.Subtypes);
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void Filter_with_only_subtypes_is_not_treated_as_empty()
+    {
+        // 只写 subtypes 是合法定义；"一个条件都没写"才该被剔除。
+        var path = WriteTempJson("""{ "filters": [ { "id": "x", "name": "X", "subtypes": ["note"] } ] }""");
+
+        var cat = FilterCatalog.Load(path);
+        Assert.Single(cat.All);
+        Assert.Empty(cat.Problems);
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void Shipped_filters_keep_extension_groups_off_zotero()
+    {
+        // 按扩展名的筛选器在 Zotero 下**一个都不该出现**（文献条目没有扩展名），
+        // 而 Zotero 专属的条目类型筛选器不该出现在文件后端下。
+        var shipped = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+                                   "src", "UniSearch.Host", "filters.json");
+        if (!File.Exists(shipped)) return;   // 路径随构建位置变，找不到就跳过（不是失败）
+
+        var cat = FilterCatalog.Load(Path.GetFullPath(shipped));
+        Assert.Empty(cat.Problems);
+
+        var onEverything = cat.For(["everything"]).Select(f => f.Id).ToList();
+        var onZotero = cat.For(["zotero"]).Select(f => f.Id).ToList();
+
+        Assert.Contains("bioinformatics", onEverything);
+        Assert.DoesNotContain("bioinformatics", onZotero);
+        Assert.Contains("zot-journal", onZotero);
+        Assert.DoesNotContain("zot-journal", onEverything);
+    }
+
+    /// <summary>一条 Zotero 条目（无本地路径，只有 select URI）。</summary>
+    static SearchResult ZoteroRow(string subtype) => new()
+    {
+        ProviderId = "zotero",
+        ProviderItemId = "N35RT33I",
+        Kind = ResultKind.BibliographicItem,
+        Subtype = subtype,
+        Title = "Parallel enzymatic DNA synthesis",
+        Uri = "zotero://select/library/items/N35RT33I",
+    };
+
     [Fact]
     public void Filter_provider_scope_limits_visibility()
     {

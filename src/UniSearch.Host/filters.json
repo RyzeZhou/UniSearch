@@ -1,12 +1,13 @@
 {
-  "version": 1,
-  "comment": "UniSearch 筛选器定义。这是程序自带的一份模板，改它会在下次更新程序时被覆盖 —— 你自己的筛选器请写进 %LOCALAPPDATA%\\UniSearch\\filters.json（同名 id 会覆盖这里的）。字段说明：id 稳定标识（小写）；name 标签上显示的名字；glyph 可选图标码点（Segoe Fluent Icons）；extensions 扩展名（不带点，大小写都行）；kinds 结果类型（File/Folder/Image/Video/Audio/ArchiveEntry/CodeSymbol/Application/BibliographicItem/Note/WebPage…）；namePattern 文件名正则（可选）；providers 限定只在这些后端下出现（留空=所有后端）；order 排序（内置分类占 0-900，默认 500）；hidden 为 true 时不在标签栏显示。匹配是并集：扩展名命中、类型命中、正则命中，任一成立就算属于该筛选器。",
+  "version": 2,
+  "comment": "UniSearch 筛选器定义。这是程序自带的一份模板，改它会在下次更新程序时被覆盖 —— 你自己的筛选器请写进 %LOCALAPPDATA%\\UniSearch\\filters.json（同名 id 会覆盖这里的）。字段说明：id 稳定标识（小写）；name 标签上显示的名字；glyph 可选图标码点（Segoe Fluent Icons）；extensions 扩展名（不带点，大小写都行）；kinds 结果类型（File/Folder/Image/Video/Audio/ArchiveEntry/CodeSymbol/Application/BibliographicItem/Note/WebPage…）；subtypes 语义子类型（小写连字符，如 journal-article、preprint、attachment、pdf）；namePattern 文件名正则（可选）；providers 限定只在这些后端下出现（留空=所有后端）；order 排序（内置分类占 0-900，默认 500）；hidden 为 true 时不在标签栏显示。匹配是并集：扩展名命中、类型命中、子类型命中、正则命中，任一成立就算属于该筛选器。",
   "filters": [
     {
       "id": "bioinformatics",
       "name": "生信相关",
       "order": 500,
       "description": "结构 / 序列 / 比对 / 注释类文件（pdb、cif、fasta、sam、vcf、gff…）",
+      "providers": ["everything", "anytxt"],
       "extensions": [
         "pdb", "ent", "cif", "mmcif", "pdbx", "pdbqt", "mol2", "mol", "sdf", "xyz", "pse", "pymol",
         "fasta", "fa", "fna", "faa", "ffn", "frn", "fastq", "fq",
@@ -20,6 +21,7 @@
       "name": "3D/CAD",
       "order": 510,
       "description": "建模与打印类文件",
+      "providers": ["everything", "anytxt"],
       "extensions": [
         "stl", "obj", "3mf", "step", "stp", "iges", "igs", "dwg", "dxf",
         "fbx", "blend", "gltf", "glb", "ply", "dae", "skp", "f3d", "scad"
@@ -30,6 +32,7 @@
       "name": "笔记本",
       "order": 520,
       "description": "交互式笔记本与可复现报告",
+      "providers": ["everything", "anytxt"],
       "extensions": ["ipynb", "rmd", "qmd", "nb", "wl", "cdf"]
     },
     {
@@ -37,10 +40,48 @@
       "name": "配置",
       "order": 530,
       "description": "配置文件（json/yaml/toml/ini/env…）",
+      "providers": ["everything", "anytxt"],
       "extensions": [
         "json", "jsonc", "json5", "yaml", "yml", "toml", "ini", "cfg", "conf", "config",
         "env", "properties", "editorconfig", "lock", "plist", "xml"
       ]
+    },
+
+    {
+      "id": "zot-journal",
+      "name": "期刊论文",
+      "order": 400,
+      "glyph": "E8A5",
+      "description": "Zotero 里的期刊论文条目",
+      "providers": ["zotero"],
+      "subtypes": ["journal-article"]
+    },
+    {
+      "id": "zot-preprint",
+      "name": "预印本",
+      "order": 410,
+      "glyph": "E8A5",
+      "description": "Zotero 里的预印本条目",
+      "providers": ["zotero"],
+      "subtypes": ["preprint"]
+    },
+    {
+      "id": "zot-notes",
+      "name": "笔记",
+      "order": 420,
+      "glyph": "E70B",
+      "description": "Zotero 里自己写的笔记",
+      "providers": ["zotero"],
+      "subtypes": ["note"]
+    },
+    {
+      "id": "zot-pdf",
+      "name": "有 PDF",
+      "order": 430,
+      "glyph": "E8A5",
+      "description": "Zotero 的附件条目（有真实本地路径，可直接打开/预览）",
+      "providers": ["zotero"],
+      "subtypes": ["attachment"]
     }
   ]
 }

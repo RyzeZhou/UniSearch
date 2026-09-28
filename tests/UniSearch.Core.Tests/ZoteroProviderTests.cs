@@ -259,7 +259,8 @@ public class ZoteroProviderTests
 
         Assert.Equal("N35RT33I", r.ProviderItemId);
         Assert.Equal(ResultKind.BibliographicItem, r.Kind);
-        Assert.Equal("journalArticle", r.Subtype);
+        // SDK 约定 Subtype 是小写连字符形式（筛选器定义按它匹配），不是 Zotero 原生的 camelCase
+        Assert.Equal("journal-article", r.Subtype);
         Assert.Equal("Parallel enzymatic DNA synthesis using a semiconductor chip", r.Title);
         Assert.Null(r.Path);                                        // 顶层条目没有本地路径
         Assert.Equal("zotero://select/library/items/N35RT33I", r.Uri);
@@ -350,6 +351,16 @@ public class ZoteroProviderTests
         => Assert.Equal(expected, ZoteroItemMapper.Year(date));
 
     // ───────────────────────── 定位可执行文件 ─────────────────────────
+
+    [Theory]
+    [InlineData("journalArticle", "journal-article")]
+    [InlineData("preprint", "preprint")]
+    [InlineData("bookSection", "book-section")]
+    [InlineData("computerProgram", "computer-program")]
+    [InlineData("attachment", "attachment")]
+    [InlineData("", "document")]
+    public void ToSubtype_converts_zoteros_camel_case_to_the_sdk_form(string itemType, string expected)
+        => Assert.Equal(expected, ZoteroItemMapper.ToSubtype(itemType));
 
     [Theory]
     [InlineData("\"D:\\Program\\Zotero\\zotero.exe\" -url \"%1\"", "D:\\Program\\Zotero\\zotero.exe")]

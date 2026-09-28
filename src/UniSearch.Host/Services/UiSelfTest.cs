@@ -633,7 +633,11 @@ public static class UiSelfTest
         var counts = cat.All.Select(f => $"{f.Id}={vm.Rows.Count(r => f.Matches(r.Source))}");
         log.Info("selftest", $"当前 {vm.Rows.Count} 行里各筛选器命中：[{string.Join(", ", counts)}]");
 
-        var probe = cat.All.FirstOrDefault();
+        // 挑一个**当前来源下真的可见**的筛选器当探针。
+        // ⚠ 不能用 cat.All.First()：定义文件里现在有只给 Zotero 用的条目类型筛选器，
+        // 它们按 order 排在最前，但在 Everything 下根本不出现 —— 拿它当探针会"点了没反应"，
+        // 然后断言把"筛选器不可见"误报成"筛选没生效"。
+        var probe = cat.For(vm.EffectiveProviderScope).FirstOrDefault();
         if (probe is null)
         {
             log.Warn("selftest", "没有加载到任何筛选器定义（dist\\filters.json 或 %LOCALAPPDATA%\\UniSearch\\filters.json 都不在？）");
@@ -656,6 +660,42 @@ public static class UiSelfTest
         changed = await WaitForRowsChangeAsync(vm, filtered).ConfigureAwait(true);
         log.Info("selftest", $"回到「全部」：行数 {filtered} -> {vm.Rows.Count}（等到新快照={changed}）" +
                              $"查询串=[{vm.LastProviderText}]（期望不含 ext:）");
+
+        // ⑥ 选中的分类标签**不能消失**。
+        // 分类标签是按"快照里有哪些分组"建的，而分组是按结果建的 —— 点一个这次一条都没落进去的分类，
+        // 重查后分组没了、标签也跟着没，但 SelectedTabId 还停在它上面：筛选仍在生效、用户却看不见也点不掉。
+        // （实测踩到：AnyTXT 的「正文命中」就是这么消失的。）
+        var zeroCategory = new[] { CategoryIds.ContentMatches, CategoryIds.Music, CategoryIds.Archives, CategoryIds.Videos }
+                    .FirstOrDefault(c => vm.Tabs.All(t => t.Id != c));
+        if (zeroCategory is null)
+        {
+            log.Warn("selftest", "⑥ 跳过：所有候选分类都已在标签栏里，挑不出一个 0 结果的");
+        }
+        else
+        {
+            vm.SelectedTabId = zeroCategory;
+            await WaitForIdleAsync(vm).ConfigureAwait(true);
+
+            var kept = vm.Tabs.Any(t => t.Id == zeroCategory);
+            var selected = string.Equals(vm.SelectedTabId, zeroCategory, StringComparison.Ordinal);
+            log.Info("selftest", $"⑥ 选中一个 0 结果的分类「{zeroCategory}」后重查 -> 标签还在={kept}、" +
+                                 $"仍是当前选中={selected}（期望都为 True）-> {(kept && selected ? "PASS" : "FAIL")}");
+            log.Info("selftest", $"   标签栏=[{string.Join(", ", vm.Tabs.Select(t => t.Id + "(" + t.Count + ")"))}]");
+
+            vm.SelectedTabId = CategoryIds.All;
+            await WaitForIdleAsync(vm).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>等到搜索跑完（IsBusy 落回 false）。最多 5 秒。</summary>
+    static async Task WaitForIdleAsync(SearchSessionViewModel vm, int timeoutMs = 5000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            await Task.Delay(80).ConfigureAwait(true);
+            if (!vm.IsBusy) return;
+        }
     }
 
     /// <summary>等到行数变化（最多 5 秒）。返回是否等到 —— 没等到就是真有问题，不是"慢"。</summary>

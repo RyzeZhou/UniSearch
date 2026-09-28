@@ -1069,6 +1069,19 @@ public sealed partial class SearchSessionViewModel : ObservableObject
                                      f.Glyph ?? SnapshotMapper.GlyphFor(CategoryIds.More), f.Order, f));
         }
 
+        // ⚠ 当前选中的内置分类，哪怕这次一条都没归到它，**也必须留着**。
+        // 分类标签是按"快照里有哪些分组"建的，而分组是按**结果**建的 —— 于是点一个分类之后
+        // 重查如果一条都没落进去，那个分组就没了、标签也跟着消失，但 SelectedTabId 还停在它上面：
+        // 筛选仍在生效、用户却看不见也点不掉（实测踩到：AnyTXT 的「正文命中」就是这么消失的）。
+        // 保留一个 0 计数的标签，至少让"当前在筛什么"是可见、可撤销的。
+        if (SelectedTabId is { Length: > 0 } sel && sel != CategoryIds.All &&
+            Catalog.Find(sel) is null &&                     // 自定义筛选器走另一条路（见下）
+            tabs.All(t => t.Id != sel))
+        {
+            tabs.Add(new CategoryTab(sel, CategoryEngine.DisplayNameOf(sel), 0,
+                                     SnapshotMapper.GlyphFor(sel), CategoryEngine.OrderOf(sel)));
+        }
+
         // 模板内顺序已由 ForTemplate 按"引用先后"给出，但内置分类仍按 order 排 ——
         // 所以这里只给自定义筛选器保持相对次序：OrderBy 是稳定的。
         tabs.Sort((a, b) => a.Order.CompareTo(b.Order));

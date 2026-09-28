@@ -55,7 +55,9 @@ public static class ZoteroItemMapper
             ProviderId = ZoteroProvider.ProviderId,
             ProviderItemId = key,
             Kind = kind,
-            Subtype = itemType,
+            // Subtype 用 SDK 约定的"小写连字符"形式（journal-article），不是 Zotero 原生的 camelCase ——
+            // 筛选器定义要按它匹配（`subtypes: ["journal-article"]`），两种写法混着来一定会有人写错。
+            Subtype = ToSubtype(itemType),
             // 元数据命中（标题/作者/年份）与正文命中（qmode=everything 打中的 PDF）在 API 响应里
             // 区分不出来 —— 所以如实标 Metadata，不假装知道是哪种。
             Match = MatchKind.Metadata,
@@ -88,6 +90,23 @@ public static class ZoteroItemMapper
 
     /// <summary>Zotero 的选中 URI。<c>select/library/items/&lt;KEY&gt;</c> 是官方文档里的形式。</summary>
     public static string SelectUri(string key) => $"zotero://select/library/items/{key}";
+
+    /// <summary>
+    /// Zotero 的 <c>itemType</c>（camelCase：<c>journalArticle</c>）→ SDK 约定的
+    /// <c>Subtype</c>（小写连字符：<c>journal-article</c>）。
+    /// 转换只做一次、只在这里 —— 别处一律用转换后的形式，否则筛选器定义会有人写错。
+    /// </summary>
+    public static string ToSubtype(string itemType)
+    {
+        if (string.IsNullOrWhiteSpace(itemType)) return "document";
+        var sb = new System.Text.StringBuilder(itemType.Length + 4);
+        foreach (var c in itemType)
+        {
+            if (char.IsUpper(c) && sb.Length > 0) sb.Append('-');
+            sb.Append(char.ToLowerInvariant(c));
+        }
+        return sb.ToString();
+    }
 
     /// <summary>
     /// 附件在磁盘上的真实路径。

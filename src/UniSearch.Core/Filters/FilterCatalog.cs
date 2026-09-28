@@ -45,6 +45,16 @@ public sealed record FilterDefinition
     /// <summary>结果类型名（<see cref="ResultKind"/> 的名字，如 <c>Folder</c>、<c>Image</c>）。</summary>
     public IReadOnlyList<string> Kinds { get; init; } = [];
 
+    /// <summary>
+    /// 语义<b>子</b>类型（<see cref="SearchResult.Subtype"/>，小写连字符：<c>journal-article</c>、
+    /// <c>preprint</c>、<c>attachment</c>、<c>pdf</c>…）。
+    /// <para>
+    /// 为什么单开一维：<see cref="Kinds"/> 只有"文献条目"这一档粗粒度，而 Zotero 有 40 种条目类型 ——
+    /// 想表达"期刊论文"就够不着。子类型正是后端如实声明的那一层，拿它当筛选维度最直接。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Subtypes { get; init; } = [];
+
     /// <summary>文件名正则（可选）。</summary>
     public string? NamePattern { get; init; }
 
@@ -57,7 +67,7 @@ public sealed record FilterDefinition
 
     /// <summary>没有任何匹配条件 = 会匹配一切，属于配置写错，加载时会被剔除。</summary>
     [JsonIgnore]
-    public bool IsEmpty => Extensions.Count == 0 && Kinds.Count == 0 && NameRegex is null;
+    public bool IsEmpty => Extensions.Count == 0 && Kinds.Count == 0 && Subtypes.Count == 0 && NameRegex is null;
 
     /// <summary>这个筛选器在某个后端下是否可见。</summary>
     public bool AppliesTo(string? providerId) =>
@@ -72,6 +82,10 @@ public sealed record FilterDefinition
             return true;
 
         if (Kinds.Count > 0 && Kinds.Contains(r.Kind.ToString(), StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        if (Subtypes.Count > 0 && r.Subtype is { Length: > 0 } sub &&
+            Subtypes.Contains(sub, StringComparer.OrdinalIgnoreCase))
             return true;
 
         if (NameRegex is not null && NameRegex.IsMatch(r.Title))
@@ -230,6 +244,7 @@ public sealed class FilterCatalog
 
         var extensions = CleanExtensions(raw.Extensions);
         var kinds = CleanKinds(raw.Kinds, id, where, problems);
+        var subtypes = CleanTokens(raw.Subtypes);
 
         Regex? regex = null;
         if (!string.IsNullOrWhiteSpace(raw.NamePattern))
@@ -251,6 +266,7 @@ public sealed class FilterCatalog
             Name = name,
             Extensions = extensions,
             Kinds = kinds,
+            Subtypes = subtypes,
             NameRegex = regex,
             Glyph = string.IsNullOrWhiteSpace(raw.Glyph) ? null : raw.Glyph.Trim(),
         };
@@ -260,7 +276,7 @@ public sealed class FilterCatalog
         // 后者是前者的后果，重复报只会让人以为有两处错误。
         if (def.IsEmpty && !problems.Any(p => p.Contains($"「{name}」") || p.Contains($"「{id}」")))
         {
-            problems.Add($"{where}：筛选器「{name}」没有任何匹配条件（extensions / kinds / namePattern 全空），已跳过");
+            problems.Add($"{where}：筛选器「{name}」没有任何匹配条件（extensions / kinds / subtypes / namePattern 全空），已跳过");
             return null;
         }
         return def.IsEmpty ? null : def;
@@ -359,6 +375,28 @@ public sealed class FilterCatalog
                 else
                     winner[provider] = t;
             }
+    }
+
+    /// <summary>
+    /// 一串"自由取值"的 token：小写、去空、去重、保序。
+    /// <para>
+    /// 子类型这类值<b>不做白名单校验</b> —— 后端会不断加新子类型（Zotero 有 40 种条目类型），
+    /// 我们不可能维护一份完整清单。写了不存在的值只是匹配不到，不是配置错误，
+    /// 报出来只会让人以为文件写坏了。
+    /// </para>
+    /// </summary>
+    static IReadOnlyList<string> CleanTokens(IReadOnlyList<string>? raw)
+    {
+        if (raw is null) return [];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var list = new List<string>();
+        foreach (var item in raw)
+        {
+            var v = (item ?? string.Empty).Trim().ToLowerInvariant();
+            if (v.Length == 0 || !seen.Add(v)) continue;
+            list.Add(v);
+        }
+        return list;
     }
 
     /// <summary>扩展名统一成"小写、不含点、去重、去空"。用户写 <c>.PDB</c> 或 <c>pdb</c> 都该能用。</summary>
