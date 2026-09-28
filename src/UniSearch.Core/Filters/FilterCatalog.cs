@@ -90,6 +90,12 @@ public sealed class FilterFile
     public string? Comment { get; set; }
 
     public List<FilterDefinition> Filters { get; set; } = [];
+
+    /// <summary>
+    /// 模板节（v2）。<b>null = 这个文件根本没写 templates</b>，这与"写了空数组"不是一回事：
+    /// 没写 = 保持现状平铺（升级第一天行为不变），写了 = 标签栏的组织方式交给模板。
+    /// </summary>
+    public List<FilterTemplate>? Templates { get; set; }
 }
 
 /// <summary>
@@ -110,14 +116,22 @@ public sealed class FilterCatalog
         AllowTrailingCommas = true,
     };
 
-    FilterCatalog(IReadOnlyList<FilterDefinition> all, IReadOnlyList<string> sources, IReadOnlyList<string> problems)
+    FilterCatalog(IReadOnlyList<FilterDefinition> all, IReadOnlyList<FilterTemplate> templates,
+                  IReadOnlyList<string> sources, IReadOnlyList<string> problems)
     {
         All = all;
+        Templates = templates;
         Sources = sources;
         Problems = problems;
     }
 
     public IReadOnlyList<FilterDefinition> All { get; }
+
+    /// <summary>
+    /// 按 <see cref="FilterTemplate.Order"/> 排好序的模板；<b>空 = 没有任何文件写过 templates 节</b>，
+    /// 那时标签栏走现状平铺（见 <see cref="ResolveTemplate"/>）。
+    /// </summary>
+    public IReadOnlyList<FilterTemplate> Templates { get; }
 
     /// <summary>实际读到的文件（诊断用：用户改完不生效时，先看他改的是不是这一份）。</summary>
     public IReadOnlyList<string> Sources { get; }
@@ -125,17 +139,22 @@ public sealed class FilterCatalog
     /// <summary>加载过程中的问题（文件坏了、id 非法、正则编译失败…）。不静默吞掉。</summary>
     public IReadOnlyList<string> Problems { get; }
 
-    public static FilterCatalog Empty { get; } = new([], [], []);
+    public static FilterCatalog Empty { get; } = new([], [], [], []);
 
     /// <summary>
     /// 按顺序读入若干文件并合并：<b>后面的覆盖前面的同 id 项</b>，
     /// 所以调用方把"程序自带模板"放前面、"用户自己的"放后面。
     /// 文件不存在不算错误（第一次运行没有用户文件是常态）。
+    /// <para>
+    /// <c>filters</c> 与 <c>templates</c> <b>各自独立合并</b>：用户文件里只写 filters 时，
+    /// 程序模板里的 templates 照样生效（不会被"用户没写"抹掉）。
+    /// </para>
     /// </summary>
     public static FilterCatalog Load(params string?[] jsonPaths)
     {
         var merged = new Dictionary<string, FilterDefinition>(StringComparer.OrdinalIgnoreCase);
         var order = new List<string>();
+        var mergedTemplates = new Dictionary<string, (FilterTemplate Template, string Source)>(StringComparer.OrdinalIgnoreCase);
         var sources = new List<string>();
         var problems = new List<string>();
 
@@ -155,9 +174,9 @@ public sealed class FilterCatalog
                 continue;
             }
 
-            if (file?.Filters is null) continue;
+            if (file is null) continue;
 
-            foreach (var raw in file.Filters)
+            foreach (var raw in file.Filters ?? [])
             {
                 var def = Normalize(raw, path, problems);
                 if (def is null) continue;
@@ -169,12 +188,29 @@ public sealed class FilterCatalog
 
                 merged[def.Id] = def;
             }
+
+            foreach (var raw in file.Templates ?? [])
+            {
+                var tpl = NormalizeTemplate(raw, path, problems);
+                if (tpl is not null) mergedTemplates[tpl.Id] = (tpl, path);
+            }
         }
 
         var list = order.Where(merged.ContainsKey).Select(id => merged[id])
                         .OrderBy(f => f.Order).ThenBy(f => f.Name, StringComparer.CurrentCulture)
                         .ToList();
-        return new FilterCatalog(list, sources, problems);
+
+        // 模板的引用校验与默认冲突都得等"所有文件合并完"才判 —— 程序模板引用的定义可能只在
+        // 用户那份文件里（或反过来），边读边校验会把合法引用误判成"不存在"。
+        // 排序在这里一次定死：后面 DefaultTemplate 取 FirstOrDefault 就是"order 小者胜"。
+        var templates = mergedTemplates.Values
+            .OrderBy(v => v.Template.Order).ThenBy(v => v.Template.Name, StringComparer.CurrentCulture)
+            .Select(v => ValidateReferences(v.Template, v.Source, merged, problems))
+            .ToList();
+
+        ReportDefaultConflicts(templates, problems);
+
+        return new FilterCatalog(list, templates, sources, problems);
     }
 
     /// <summary>校验并规范化一条定义。返回 null 表示这条不可用（原因记进 problems）。</summary>
@@ -182,14 +218,12 @@ public sealed class FilterCatalog
     {
         var where = Path.GetFileName(source);
 
-        var id = (raw.Id ?? string.Empty).Trim().ToLowerInvariant();
+        var id = NormalizeId(raw.Id);
         if (id.Length == 0)
         {
             problems.Add($"{where}：有一条筛选器没有 id，已跳过");
             return null;
         }
-        // id 会进配置和日志，只留安全字符（"生信 相关" 这种写法自动变成 "生信-相关"）
-        id = new string(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray());
 
         var name = (raw.Name ?? string.Empty).Trim();
         if (name.Length == 0) name = id;
@@ -230,6 +264,101 @@ public sealed class FilterCatalog
             return null;
         }
         return def.IsEmpty ? null : def;
+    }
+
+    /// <summary>
+    /// id 会进配置和日志，只留安全字符（"生信 相关" 这种写法自动变成 "生信-相关"）。
+    /// 筛选器 id 与模板 id、以及模板里对筛选器的引用，都走这一套 —— 否则用户在模板里
+    /// 按原样写 <c>"Bio Info"</c> 就会引用不到已被规范成 <c>bio-info</c> 的那条定义。
+    /// </summary>
+    static string NormalizeId(string? raw) =>
+        new string((raw ?? string.Empty).Trim().ToLowerInvariant()
+                   .Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-')
+                   .ToArray());
+
+    /// <summary>后端 id 或 <c>"*"</c>（全局兜底）统一成小写去空；<c>"*"</c> 原样保留。</summary>
+    static string NormalizeProviderToken(string? raw)
+    {
+        var v = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        if (v == "*") return "*";
+        return new string(v.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-').ToArray());
+    }
+
+    /// <summary>一串 id：规范化、去空、去重、保序。</summary>
+    static List<string> CleanIdList(IReadOnlyList<string>? raw, bool providerTokens = false)
+    {
+        if (raw is null) return [];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var list = new List<string>();
+        foreach (var item in raw)
+        {
+            var v = providerTokens ? NormalizeProviderToken(item) : NormalizeId(item);
+            if (v.Length == 0 || !seen.Add(v)) continue;
+            list.Add(v);
+        }
+        return list;
+    }
+
+    /// <summary>校验并规范化一个模板。返回 null 表示这条不可用（原因记进 problems）。</summary>
+    static FilterTemplate? NormalizeTemplate(FilterTemplate raw, string source, List<string> problems)
+    {
+        var where = Path.GetFileName(source);
+
+        var id = NormalizeId(raw.Id);
+        if (id.Length == 0)
+        {
+            problems.Add($"{where}：有一个模板没有 id，已跳过");
+            return null;
+        }
+
+        var name = (raw.Name ?? string.Empty).Trim();
+
+        // 模板与筛选器不同：一条引用都没有是合法的（"极简"模板就是空标签栏），
+        // 所以这里不像 FilterDefinition 那样把"空"当写错。
+        return raw with
+        {
+            Id = id,
+            Name = name.Length == 0 ? id : name,
+            Filters = CleanIdList(raw.Filters),
+            DefaultFor = CleanIdList(raw.DefaultFor, providerTokens: true),
+            Providers = CleanIdList(raw.Providers, providerTokens: true),
+        };
+    }
+
+    /// <summary>剔除指向不存在筛选器的引用（记进 problems，不崩、也不整条丢模板）。</summary>
+    static FilterTemplate ValidateReferences(FilterTemplate t, string source,
+                                             Dictionary<string, FilterDefinition> filters, List<string> problems)
+    {
+        var where = Path.GetFileName(source);
+        var kept = new List<string>();
+        foreach (var id in t.Filters)
+        {
+            if (!filters.ContainsKey(id))
+            {
+                problems.Add($"{where}：模板「{t.Name}」引用了不存在的筛选器「{id}」，已剔除该引用");
+                continue;
+            }
+            kept.Add(id);
+        }
+        return kept.Count == t.Filters.Count ? t : t with { Filters = kept };
+    }
+
+    /// <summary>
+    /// 两个模板都认领同一个后端为默认时，<b>order 小者胜</b>，并把冲突写进 problems ——
+    /// 静默取一个的话，用户会看到"我明明写了 defaultFor 却不生效"，却查不出为什么。
+    /// </summary>
+    static void ReportDefaultConflicts(IReadOnlyList<FilterTemplate> templates, List<string> problems)
+    {
+        var winner = new Dictionary<string, FilterTemplate>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in templates)          // 调用方已按 order/name 排好，先到的就是胜者
+            foreach (var provider in t.DefaultFor)
+            {
+                if (winner.TryGetValue(provider, out var first))
+                    problems.Add($"模板「{t.Name}」与「{first.Name}」都声明是「{provider}」的默认模板，" +
+                                 $"按 order 取「{first.Name}」");
+                else
+                    winner[provider] = t;
+            }
     }
 
     /// <summary>扩展名统一成"小写、不含点、去重、去空"。用户写 <c>.PDB</c> 或 <c>pdb</c> 都该能用。</summary>
@@ -274,16 +403,75 @@ public sealed class FilterCatalog
     /// 空/null 表示不限定 —— 那时给全量，因为 UI 还没有来源信息可用。
     /// </para>
     /// </summary>
-    public IReadOnlyList<FilterDefinition> For(IReadOnlyList<string>? providerIds)
-    {
-        if (providerIds is not { Count: > 0 })
-            return All.Where(f => !f.Hidden).ToList();
+    public IReadOnlyList<FilterDefinition> For(IReadOnlyList<string>? providerIds) =>
+        All.Where(f => Visible(f, providerIds)).ToList();
 
-        return All.Where(f => !f.Hidden &&
-                              (f.Providers.Count == 0 ||
-                               f.Providers.Any(p => providerIds.Contains(p, StringComparer.OrdinalIgnoreCase))))
-                  .ToList();
+    /// <summary>某个定义在该来源集合下该不该出现在标签栏里。</summary>
+    static bool Visible(FilterDefinition f, IReadOnlyList<string>? providerIds) =>
+        !f.Hidden &&
+        (f.Providers.Count == 0 ||
+         providerIds is not { Count: > 0 } ||
+         f.Providers.Any(p => providerIds.Contains(p, StringComparer.OrdinalIgnoreCase)));
+
+    // ── 模板（v2）──────────────────────────────────────────────────────────────
+    // 模板只决定"标签栏里显示哪几个、按什么顺序"，不碰匹配语义；没有模板时全部回退到上面的平铺。
+
+    /// <summary>
+    /// 标签栏该显示哪些筛选器。
+    /// <para>
+    /// <paramref name="template"/> 为 null（或没写过 templates 节）= <b>现状平铺</b>，与
+    /// <see cref="For"/> 逐项一致；给了模板 = 模板引用的 id ∩ <see cref="Visible"/>（双重显隐），
+    /// 且<b>顺序以模板里的引用先后为准</b>（模板存在的意义就是"有序引用"）。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<FilterDefinition> ForTemplate(FilterTemplate? template, IReadOnlyList<string>? providerIds)
+    {
+        if (template is null) return For(providerIds);
+
+        var result = new List<FilterDefinition>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in template.Filters)
+        {
+            var def = Find(id);
+            if (def is null || !Visible(def, providerIds)) continue;
+            if (seen.Add(def.Id)) result.Add(def);
+        }
+        return result;
     }
+
+    public FilterTemplate? FindTemplate(string? id) =>
+        id is { Length: > 0 }
+            ? Templates.FirstOrDefault(t => string.Equals(t.Id, id, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+    /// <summary>某个后端下下拉里可选的模板（<c>providers</c> 留空 = 所有后端可选）；空/null 来源给全量。</summary>
+    public IReadOnlyList<FilterTemplate> TemplatesFor(string? providerId) =>
+        Templates.Where(t => t.AvailableFor(providerId)).ToList();
+
+    /// <summary>
+    /// 某个后端当前该用哪个模板。解析链（前一步落空才看下一步）：
+    /// <list type="number">
+    /// <item>用户<b>钉住</b>的（<c>settings.filterTemplates.&lt;providerId&gt;</c>）；</item>
+    /// <item>部署级默认（<c>providers.&lt;id&gt;.options.filterTemplate</c>）；</item>
+    /// <item>定义文件里 <c>defaultFor</c> 含该后端、order 最小者；</item>
+    /// <item><c>defaultFor</c> 含 <c>"*"</c>、order 最小者；</item>
+    /// <item>都没有 → <b>null = 回退现状平铺</b>。</item>
+    /// </list>
+    /// 认不出的 id（比如设置里钉的模板已被删掉）不生效，直接往下一步走 —— 它不该把标签栏变空。
+    /// </summary>
+    public FilterTemplate? ResolveTemplate(string? providerId,
+                                           string? pinnedTemplateId = null,
+                                           string? deploymentTemplateId = null) =>
+        FindTemplate(pinnedTemplateId) ??
+        FindTemplate(deploymentTemplateId) ??
+        DefaultTemplate(providerId) ??
+        DefaultTemplate("*");
+
+    /// <summary>认领了该后端（或 <c>"*"</c>）为默认的模板里 order 最小的那个。Templates 已排序，取第一个即可。</summary>
+    public FilterTemplate? DefaultTemplate(string? providerId) =>
+        providerId is { Length: > 0 }
+            ? Templates.FirstOrDefault(t => t.DefaultFor.Contains(providerId, StringComparer.OrdinalIgnoreCase))
+            : null;
 
     public FilterDefinition? Find(string? id) =>
         id is { Length: > 0 } ? All.FirstOrDefault(f => string.Equals(f.Id, id, StringComparison.OrdinalIgnoreCase)) : null;

@@ -778,4 +778,155 @@ public class CoreLogicTests
         Assert.Empty(cat.Sources);
         Assert.Empty(cat.Problems);   // 文件不存在是常态（首次运行），不是错误
     }
+
+    // ── 筛选器模板（v2）────────────────────────────────────────────────────────
+    // 模板只改"标签栏怎么组织"，不改匹配语义；最要紧的一条是：**没写 templates 节时行为与现状一致**。
+
+    [Fact]
+    public void Filter_catalog_without_templates_keeps_flat_behaviour()
+    {
+        var path = WriteTempJson("""
+        {
+          "filters": [
+            { "id": "bio", "name": "生信", "extensions": ["pdb"] },
+            { "id": "only-anytxt", "name": "只给全文后端", "extensions": ["txt"], "providers": ["anytxt"] }
+          ]
+        }
+        """);
+
+        var cat = FilterCatalog.Load(path);
+        Assert.Empty(cat.Templates);                                     // 没写 = 一个模板都没有
+        Assert.Null(cat.ResolveTemplate("everything"));
+        Assert.Null(cat.ResolveTemplate("everything", "files", "literature"));   // 节都没有，钉住也无从谈起
+        Assert.Null(cat.ResolveTemplate(null));
+        Assert.Equal(cat.For(["everything"]).Select(f => f.Id), cat.ForTemplate(null, ["everything"]).Select(f => f.Id));
+        Assert.Equal(cat.For(null).Select(f => f.Id), cat.ForTemplate(null, null).Select(f => f.Id));
+        Assert.Equal(["bio"], cat.For(["everything"]).Select(f => f.Id));
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void Filter_templates_merge_independently_and_later_file_wins()
+    {
+        var program = WriteTempJson("""
+        {
+          "filters": [ { "id": "bio", "name": "生信", "extensions": ["pdb"] } ],
+          "templates": [ { "id": "files", "name": "文件查找", "filters": ["bio"], "defaultFor": ["everything"] } ]
+        }
+        """);
+        var mine = WriteTempJson("""
+        { "templates": [ { "id": "files", "name": "我的文件查找", "order": 10, "filters": [] } ] }
+        """);
+
+        var cat = FilterCatalog.Load(program, mine);
+        var t = Assert.Single(cat.Templates);
+        Assert.Equal("我的文件查找", t.Name);           // 同 id 后者为准
+        Assert.Empty(t.Filters);
+        Assert.Empty(t.DefaultFor);                     // 覆盖是整条替换，不做字段级合并
+        Assert.Equal(10, t.Order);
+        // filters 与 templates 各自独立合并：用户文件里没写 filters，程序模板那条定义照样在
+        Assert.Equal(["bio"], cat.All.Select(f => f.Id));
+        File.Delete(program);
+        File.Delete(mine);
+    }
+
+    [Fact]
+    public void Filter_templates_drop_unknown_references_with_a_problem()
+    {
+        var path = WriteTempJson("""
+        {
+          "filters": [ { "id": "Bio Info", "name": "生信", "extensions": ["pdb"] } ],
+          "templates": [
+            { "id": "files", "name": "文件查找", "filters": ["Bio Info", "ghost", "ghost"] }
+          ]
+        }
+        """);
+
+        var cat = FilterCatalog.Load(path);
+        // 引用按筛选器那套规范化（"Bio Info" → "bio-info"）才对得上；不存在的剔除、重复的去掉
+        Assert.Equal(["bio-info"], Assert.Single(cat.Templates).Filters);
+        Assert.Single(cat.Problems, p => p.Contains("ghost"));
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void Filter_templates_default_conflict_resolves_by_order_and_is_reported()
+    {
+        var path = WriteTempJson("""
+        {
+          "filters": [ { "id": "bio", "name": "生信", "extensions": ["pdb"] } ],
+          "templates": [
+            { "id": "b", "name": "乙", "order": 200, "filters": ["bio"], "defaultFor": ["Everything"] },
+            { "id": "a", "name": "甲", "order": 100, "filters": ["bio"], "defaultFor": ["everything"] }
+          ]
+        }
+        """);
+
+        var cat = FilterCatalog.Load(path);
+        Assert.Equal(["a", "b"], cat.Templates.Select(t => t.Id));        // 按 order 排
+        Assert.Equal("a", cat.DefaultTemplate("everything")!.Id);          // order 小者胜
+        Assert.Equal("a", cat.DefaultTemplate("EVERYTHING")!.Id);          // 后端 id 大小写不敏感
+        Assert.Single(cat.Problems, p => p.Contains("默认模板"));
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void Filter_templates_resolution_chain_is_pinned_then_deployment_then_default_then_star()
+    {
+        var path = WriteTempJson("""
+        {
+          "filters": [ { "id": "bio", "name": "生信", "extensions": ["pdb"] } ],
+          "templates": [
+            { "id": "files",   "name": "文件查找", "order": 100, "filters": ["bio"], "defaultFor": ["everything"] },
+            { "id": "lit",     "name": "文献查找", "order": 110, "filters": ["bio"], "defaultFor": ["zotero"] },
+            { "id": "minimal", "name": "极简",     "order": 900, "filters": [],    "defaultFor": ["*"] }
+          ]
+        }
+        """);
+
+        var cat = FilterCatalog.Load(path);
+        Assert.Equal("files", cat.ResolveTemplate("everything")!.Id);        // 3. defaultFor 认领
+        Assert.Equal("lit", cat.ResolveTemplate("zotero")!.Id);
+        Assert.Equal("minimal", cat.ResolveTemplate("anytxt")!.Id);          // 4. "*" 兜底
+        Assert.Equal("minimal", cat.ResolveTemplate(null)!.Id);              // 全局视图也走 "*"
+        Assert.Equal("lit", cat.ResolveTemplate("everything", pinnedTemplateId: "lit")!.Id);        // 1. 钉住
+        Assert.Equal("lit", cat.ResolveTemplate("everything", deploymentTemplateId: "lit")!.Id);    // 2. 部署级
+        Assert.Equal("lit", cat.ResolveTemplate("everything", "lit", "files")!.Id);                 // 钉住压过部署级
+        Assert.Equal("files", cat.ResolveTemplate("everything", "nope")!.Id);  // 认不出的 id 不生效，往下一步走
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void Filter_templates_intersect_with_provider_scope_and_keep_reference_order()
+    {
+        var path = WriteTempJson("""
+        {
+          "filters": [
+            { "id": "bio", "name": "生信", "extensions": ["pdb"], "order": 900 },
+            { "id": "only-anytxt", "name": "仅正文命中", "extensions": ["txt"], "providers": ["anytxt"], "order": 100 },
+            { "id": "alias", "name": "别名", "extensions": ["md"], "hidden": true, "order": 200 }
+          ],
+          "templates": [
+            { "id": "mix", "name": "混合", "order": 100, "filters": ["only-anytxt", "alias", "bio"] },
+            { "id": "lit", "name": "文献", "order": 200, "filters": ["bio"], "providers": ["zotero"] }
+          ]
+        }
+        """);
+
+        var cat = FilterCatalog.Load(path);
+        var mix = cat.FindTemplate("mix")!;
+
+        // 顺序以模板里的引用先后为准（only-anytxt 的 order=100 但 bio 的 order=900，这里按引用排）
+        Assert.Equal(["only-anytxt", "bio"], cat.ForTemplate(mix, ["anytxt"]).Select(f => f.Id));
+        // 双重显隐：Everything 下 only-anytxt 不适用、alias 是别名 → 只剩 bio
+        Assert.Equal(["bio"], cat.ForTemplate(mix, ["everything"]).Select(f => f.Id));
+        // 还不知道来源时给模板内全量（hidden 仍然不显示）
+        Assert.Equal(["only-anytxt", "bio"], cat.ForTemplate(mix, null).Select(f => f.Id));
+        // 模板可选性：lit 只认 zotero，Everything 下不该出现在下拉里
+        Assert.Equal(["mix"], cat.TemplatesFor("everything").Select(t => t.Id));
+        Assert.Equal(["mix", "lit"], cat.TemplatesFor("zotero").Select(t => t.Id));
+        Assert.Equal(["mix", "lit"], cat.TemplatesFor(null).Select(t => t.Id));
+        Assert.Null(cat.FindTemplate("nope"));
+        File.Delete(path);
+    }
 }
