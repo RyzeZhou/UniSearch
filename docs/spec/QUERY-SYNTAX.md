@@ -67,8 +67,13 @@ ForeignVerbSet = { content, filelist, parent, ancestor, child, location, full-pa
 |---|---|
 | Everything | 用 `q.ProviderText`（透传时=原文，解析时=重建串），前面拼范围前缀 `ancestor:"D:\x\"` / `parent:"D:\x\"`。**绝不重排用户串**。 |
 | WindowsIndex (SystemIndex) | 透传时交给 `ISearchQueryHelper.GenerateSQLFromUserQuery(...)`（微软自己懂 AQS）；解析时用 `scope='file:<dir>'` + 名称/正文条件 |
-| AnyTXT | 无结构化语法 → 只用 `q.Text` / `q.Filters.Phrase`；范围用 `filterDir`；`IsStructured` 时提示"该后端不支持高级语法，已按纯文本搜索" |
-| Zotero / Obsidian | 只用 `q.Text`；`Extensions`/`size:` 之类对它无意义（调度阶段多半已被跳过） |
+| **AnyTXT** | **不透传**（Everything 的函数名对它毫无意义）→ 只用 `q.Text` / `Filters.Phrase`；扩展名→`filterExt`、目录→`filterDir`、`ModifiedAfter`→`lastModifyBegin`；**全盘搜索逐盘枚举**（`filterDir` 传空会被强制成 `C:`）。正则/大小/文件夹/类型下推不了 → 逐条记 Notes 如实降级 |
+| **Zotero** | **不透传** → `q.Text`→`q=`、`Filters.Kinds`→`itemType=`（近似映射）、集合走 `NamedScope`。扩展名/大小/日期范围 API **根本不支持** → 前端过滤 + Notes。⚠ 未知参数会被**静默忽略**，所以绝不塞 `date=` 假装在筛 |
+| Obsidian | 只用 `q.Text`；`Extensions`/`size:` 之类对它无意义（调度阶段多半已被跳过） |
+
+> **"不透传"是刻意的**：`ForeignVerbSet` 收的是 **Everything 的**函数名。把它原样送给 AnyTXT/Zotero
+> 只会得到 0 条，而用户看到的只是"搜不到"—— 所以这两个后端一律退化成纯文本，并明确说一句
+> "该后端不支持高级查询语法，已按纯文本搜索"。
 
 ## 5. UI 侧约定
 
