@@ -851,6 +851,57 @@ public class CoreLogicTests
         Uri = "zotero://select/library/items/N35RT33I",
     };
 
+    // ── 内置分类按后端隐藏（2026-09-28：按三个已知后端逐个写死，不做通用抽象）──
+
+    [Fact]
+    public void Anytxt_hides_the_categories_it_cannot_produce()
+    {
+        // 「正文命中」在内容检索后端下恒等于「全部」—— 纯噪声，是最该掐掉的一个
+        Assert.False(CategoryEngine.AppliesToProvider(CategoryIds.ContentMatches, "anytxt"));
+
+        foreach (var id in new[] { CategoryIds.Folders, CategoryIds.Images, CategoryIds.Videos,
+                                   CategoryIds.Music, CategoryIds.Applications, CategoryIds.Archives })
+            Assert.False(CategoryEngine.AppliesToProvider(id, "anytxt"));
+
+        // 它真能产出的那几类必须留着
+        foreach (var id in new[] { CategoryIds.All, CategoryIds.Files, CategoryIds.Documents,
+                                   CategoryIds.Code, CategoryIds.More })
+            Assert.True(CategoryEngine.AppliesToProvider(id, "anytxt"));
+    }
+
+    [Fact]
+    public void Zotero_hides_the_categories_it_structurally_cannot_produce()
+    {
+        foreach (var id in new[] { CategoryIds.Folders, CategoryIds.Images, CategoryIds.Videos,
+                                   CategoryIds.Music, CategoryIds.Applications, CategoryIds.Archives })
+            Assert.False(CategoryEngine.AppliesToProvider(id, "zotero"));
+
+        // Zotero 的强项反而一个都不能少
+        foreach (var id in new[] { CategoryIds.Literature, CategoryIds.Notes, CategoryIds.Documents,
+                                   CategoryIds.Files, CategoryIds.All })
+            Assert.True(CategoryEngine.AppliesToProvider(id, "zotero"));
+    }
+
+    [Fact]
+    public void Everything_and_the_unscoped_case_show_everything()
+    {
+        // Everything 是"什么文件都能搜"的那一个 —— 任何分类都不该被掐。
+        foreach (var d in CategoryIds.Defaults)
+        {
+            Assert.True(CategoryEngine.AppliesToProvider(d.Id, "everything"));
+            Assert.True(CategoryEngine.AppliesToProvider(d.Id, null));          // 没限定来源
+            Assert.True(CategoryEngine.AppliesToProvider(d.Id, "some-future-backend"));
+        }
+    }
+
+    [Fact]
+    public void Category_hiding_never_touches_the_all_tab()
+    {
+        // 「全部」是唯一的出口，任何后端下都必须留着 —— 否则筛进去就出不来
+        Assert.True(CategoryEngine.AppliesToProvider(CategoryIds.All, "anytxt"));
+        Assert.True(CategoryEngine.AppliesToProvider(CategoryIds.All, "zotero"));
+    }
+
     [Fact]
     public void Filter_provider_scope_limits_visibility()
     {

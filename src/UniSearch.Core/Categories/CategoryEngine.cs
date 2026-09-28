@@ -59,4 +59,37 @@ public sealed class CategoryEngine
 
     /// <summary>分类排序：内置表顺序；自定义分类排在 more 之前。</summary>
     public static int OrderOf(string categoryId) => CategoryIds.Find(categoryId)?.Order ?? 800;
+
+    /// <summary>
+    /// 某个内置分类在某个后端下**有没有意义**（无意义的不该出现在标签栏里）。
+    /// <para>
+    /// <b>刻意按三个已知后端逐个写死</b>（2026-09-28 用户拍板："目前还是按这三个特定的后端去各自设计"）。
+    /// 没做成 <see cref="CategoryDescriptor"/> 上的通用 providers 字段：只有三个后端时，
+    /// 那层抽象的间接性大于收益。等出现第四个非文件类后端，再把这张表提取成声明式字段。
+    /// </para>
+    /// <para>
+    /// 与「筛选器按后端分叉」（<c>filters.json</c> 的 <c>providers</c>）是<b>两件事</b>：
+    /// 那条管自定义筛选器，这条管这十几个内置分类。
+    /// </para>
+    /// </summary>
+    /// <param name="categoryId">内置分类 id。</param>
+    /// <param name="providerId">当前限定的后端；null = 没限定（那就都显示）。</param>
+    public static bool AppliesToProvider(string categoryId, string? providerId) => providerId switch
+    {
+        // 内容检索后端：
+        // · 「正文命中」恒等于「全部」（它本来就是全文搜索）→ 纯噪声
+        // · 其余几个按扩展名的分类在这个索引上没有对应物
+        // ⚠ 这一行跟着 AnyTXT 的**索引范围**走 —— 它现在只收 txt/md 这类文档；
+        //   哪天索引里有了图片/视频，要把对应的项放开，否则那些结果点不到。
+        "anytxt" => categoryId is not (CategoryIds.ContentMatches or CategoryIds.Folders or CategoryIds.Images
+                                       or CategoryIds.Videos or CategoryIds.Music or CategoryIds.Applications
+                                       or CategoryIds.Archives),
+
+        // 文献库：没有目录、图片、视频、音乐、应用、压缩包这些概念
+        // （附件理论上可以是任意文件类型，所以只掐掉"结构上就不存在"的那几个）
+        "zotero" => categoryId is not (CategoryIds.Folders or CategoryIds.Images or CategoryIds.Videos
+                                       or CategoryIds.Music or CategoryIds.Applications or CategoryIds.Archives),
+
+        _ => true,
+    };
 }

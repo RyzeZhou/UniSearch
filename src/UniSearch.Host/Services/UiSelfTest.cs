@@ -760,6 +760,13 @@ public static class UiSelfTest
             var allRows = vm.Rows.Count;
             var allPrint = RowFingerprint(vm);
 
+            // 把「全部」时每一行的分类依据打出来 —— "标签栏里那几个分类是怎么来的"必须可查，
+            // 否则遇到"计数是 1、点下去 0"这种对不上的情况只能靠猜（实测踩到过）。
+            foreach (var r in vm.Rows.Take(5))
+                log.Info("selftest", $"[{provider}]   · Kind={r.Source.Kind} Subtype={r.Source.Subtype ?? "-"} " +
+                                     $"Ext={r.Source.Extension ?? "-"} Match={r.Source.Match} " +
+                                     $"File={(r.Source.Path is { Length: > 0 } p ? System.IO.Path.GetFileName(p) : "(无路径)")}");
+
             foreach (var tab in tabs.Where(t => t.Id != CategoryIds.All))
             {
                 await SelectTabAndWaitAsync(vm, tab.Id).ConfigureAwait(true);

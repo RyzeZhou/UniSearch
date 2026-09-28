@@ -1092,8 +1092,13 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     void BuildTabs()
     {
         Tabs.Clear();
-        // 用 _tabGroups（「全部」时的基准），不是 _groups（当前可能已被筛过）
-        var shown = _tabGroups.Where(g => g.CategoryId != CategoryIds.All).ToList();
+        // 用 _tabGroups（「全部」时的基准），不是 _groups（当前可能已被筛过）；
+        // 再按当前后端掐掉"在这个后端下没有意义"的分类（例如 AnyTXT 下的「正文命中」恒等于全部）。
+        var scopeProvider = TemplateProviderId;
+        var shown = _tabGroups
+            .Where(g => g.CategoryId != CategoryIds.All &&
+                        CategoryEngine.AppliesToProvider(g.CategoryId, scopeProvider))
+            .ToList();
         var totalAll = shown.Sum(g => g.TotalAvailable);
         var tabs = new List<CategoryTab>
         {
