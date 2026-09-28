@@ -41,4 +41,7 @@
          自己的那份写在 %LOCALAPPDATA%\UniSearch\filters.json（同名 id 覆盖模板里的）。 -->
     <None Include="filters.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UniSearch.Providers.Anytxt\UniSearch.Providers.Anytxt.csproj" />
+  </ItemGroup>
 </Project>

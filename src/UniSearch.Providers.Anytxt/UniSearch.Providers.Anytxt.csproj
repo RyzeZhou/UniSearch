@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>UniSearch.Providers.Anytxt</RootNamespace>
+    <Description>第一方 Provider：AnyTXT 全文内容搜索（本地 JSON-RPC，Anytxt API v1）。</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UniSearch.Sdk\UniSearch.Sdk.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 翻译器与行解析是纯函数，最值得逐条断言；但它们是实现细节，不该进公开 API 面。
+         所以开 internals 给测试，而不是把它们全改成 public。 -->
+    <InternalsVisibleTo Include="UniSearch.Core.Tests" />
+  </ItemGroup>
+</Project>

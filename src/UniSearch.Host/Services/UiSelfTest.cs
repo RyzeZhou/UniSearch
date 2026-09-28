@@ -1008,4 +1008,119 @@ public static class UiSelfTest
     static string Show(string? s) => s is { Length: > 0 } ? s : "(无)";
 
     static string TabsOf(SearchSessionViewModel vm) => string.Join(", ", vm.Tabs.Select(t => t.Id));
+
+    /// <summary>
+    /// AnyTXT 联调自检（US-14）：打真服务，验"协议摸清了没有、盘符调度对不对"。
+    /// <para>
+    /// 单测覆盖的是纯函数（翻译 / 行解析）；这里覆盖的只有真跑才能知道的事：
+    /// 端点对不对、<c>filterDir</c> 真的在限定、跨盘合并真的合上了、fid 真能取回来。
+    /// <b>AnyTXT 没在跑时整段跳过</b>（不是失败）—— 没装不该让别的自检变红。
+    /// </para>
+    /// </summary>
+    public static async Task RunAnytxtAsync(UniSearch.Providers.Anytxt.AnytxtProvider provider, IUniSearchLog log)
+    {
+        var ok = true;
+        log.Info("selftest", "=== AnyTXT 联调自检 ===");
+
+        // ① 健康探针（anytxt.v1.status）
+        var health = await provider.ProbeHealthAsync(CancellationToken.None).ConfigureAwait(false);
+        log.Info("selftest", $"① 健康：{health.State} · {health.Detail ?? "-"} · 提示={health.Hint ?? "-"}");
+        if (health.State != UniSearch.Sdk.Contracts.HealthState.Ready)
+        {
+            log.Warn("selftest", "AnyTXT 不可用 —— 联调自检跳过（这不是失败，是「没装 / 没开」）");
+            return;
+        }
+
+        // ② 索引状态
+        var idx = await provider.GetIndexStateAsync(CancellationToken.None).ConfigureAwait(false);
+        log.Info("selftest", $"② 索引状态：Indexed={idx.Indexed} Phase={idx.Phase ?? "-"}");
+
+        // ③ 全盘查询（要跨盘枚举）
+        var drives = UniSearch.Providers.Anytxt.AnytxtProvider.FixedDrives();
+        log.Info("selftest", $"③ 本机固定盘：[{string.Join(", ", drives)}] —— 全盘搜索必须逐盘问，" +
+                             $"filterDir 传空会被服务端强制成 C:");
+
+        var q = new UniSearch.Sdk.Model.SearchQuery
+        {
+            RequestId = 1,
+            RawText = "semiconductor",
+            Text = "semiconductor",
+            ProviderText = "semiconductor",
+            ResultBudget = 10,
+        };
+
+        var (rows, total, batches) = await CollectAsync(provider, q, UniSearch.Sdk.Capabilities.SearchContext.Global())
+            .ConfigureAwait(false);
+        log.Info("selftest", $"   全盘 \"semiconductor\" -> 批次={batches} 行={rows.Count} 总数={total}");
+        foreach (var r in rows.Take(3))
+            log.Info("selftest", $"     {r.SizeBytes,10}B  {r.ModifiedAt:yyyy-MM-dd}  {r.Path}");
+
+        var globalOk = rows.Count > 0 && rows.All(r => r.Path is { Length: > 0 })
+                       && rows.All(r => r.Match.HasFlag(UniSearch.Sdk.Model.MatchKind.Content))
+                       && rows.All(r => r.Metadata.ContainsKey("fid"));
+        ok &= globalOk;
+        log.Info("selftest", $"   断言：有行 / 每行有真实路径 / 都标 Content / 都带 fid -> {(globalOk ? "PASS" : "FAIL")}");
+
+        // ③b 跨盘合并的直接证据：每个固定盘都要被问过一次（不能只看合并后的行数 ——
+        //     "两个盘都问了"和"只问了 C 盘而 D 盘恰好没结果"在行数上看不出区别）
+        var asked = provider.LastDriveBreakdown.Select(d => d.Dir).ToList();
+        var mergeOk = drives.All(d => asked.Contains(d, StringComparer.OrdinalIgnoreCase));
+        log.Info("selftest", $"   逐盘明细：[{string.Join(", ", provider.LastDriveBreakdown.Select(d => $"{d.Dir}={d.Rows} 行"))}] " +
+                             $"（期望每盘都问过）-> {(mergeOk ? "PASS" : "FAIL")}");
+        ok &= mergeOk;
+
+        // ④ 限定目录（filterDir 真在限定吗）
+        var scopeDir = rows.Count > 0 ? System.IO.Path.GetDirectoryName(rows[0].Path!) : null;
+        if (scopeDir is { Length: > 0 })
+        {
+            var scoped = new UniSearch.Sdk.Model.SearchQuery
+            {
+                RequestId = 2, RawText = "semiconductor", Text = "semiconductor",
+                ProviderText = "semiconductor", ResultBudget = 10,
+            };
+            var ctx = UniSearch.Sdk.Capabilities.SearchContext.InDirectory(
+                scopeDir, UniSearch.Sdk.Capabilities.QueryOrigin.Self);
+            var (srows, _, _) = await CollectAsync(provider, scoped, ctx).ConfigureAwait(false);
+
+            var inside = srows.All(r => r.Path!.StartsWith(scopeDir, StringComparison.OrdinalIgnoreCase));
+            ok &= srows.Count > 0 && inside;
+            log.Info("selftest", $"④ 限定到 [{scopeDir}] -> 行={srows.Count}，" +
+                                 $"全部落在该目录内={(inside ? "是" : "否")} -> {(srows.Count > 0 && inside ? "PASS" : "FAIL")}");
+        }
+        else
+        {
+            log.Warn("selftest", "④ 跳过：③ 没拿到带目录的行，无法验证 filterDir");
+        }
+
+        // ⑤ 不存在的词必须 0 条（否则"看起来能搜"其实是没在过滤）
+        var none = new UniSearch.Sdk.Model.SearchQuery
+        {
+            RequestId = 3, RawText = "zzz_no_such_token_qqq", Text = "zzz_no_such_token_qqq",
+            ProviderText = "zzz_no_such_token_qqq", ResultBudget = 10,
+        };
+        var (nrows, _, _) = await CollectAsync(provider, none, UniSearch.Sdk.Capabilities.SearchContext.Global())
+            .ConfigureAwait(false);
+        ok &= nrows.Count == 0;
+        log.Info("selftest", $"⑤ 不存在的词 -> 行={nrows.Count}（期望 0）-> {(nrows.Count == 0 ? "PASS" : "FAIL")}");
+
+        log.Info("selftest", ok ? "AnyTXT 联调自检：全部通过 ✓" : "AnyTXT 联调自检：有失败 ✗");
+    }
+
+    /// <summary>把一次查询的批次收干，顺便数批次 —— 批次是"流式"这件事唯一的证据。</summary>
+    static async Task<(List<UniSearch.Sdk.Model.SearchResult> Rows, int Total, int Batches)> CollectAsync(
+        UniSearch.Providers.Anytxt.AnytxtProvider provider,
+        UniSearch.Sdk.Model.SearchQuery query,
+        UniSearch.Sdk.Capabilities.SearchContext context)
+    {
+        var rows = new List<UniSearch.Sdk.Model.SearchResult>();
+        var total = 0;
+        var batches = 0;
+        await foreach (var b in provider.SearchAsync(query, context, CancellationToken.None).ConfigureAwait(false))
+        {
+            batches++;
+            rows.AddRange(b.Results);
+            if (b.TotalAvailable is { } t) total = t;
+        }
+        return (rows, total, batches);
+    }
 }

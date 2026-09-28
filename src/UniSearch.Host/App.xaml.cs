@@ -9,6 +9,7 @@ using UniSearch.Host.Services;
 using UniSearch.Host.Settings;
 using UniSearch.Host.ViewModels;
 using UniSearch.Host.Views;
+using UniSearch.Providers.Anytxt;
 using UniSearch.Providers.Everything;
 using UniSearch.Sdk.Capabilities;
 using UniSearch.Sdk.Runtime;
@@ -30,6 +31,7 @@ public partial class App : Application
     FilterCatalog? _filterCatalog;
     MainWindow? _win;
     EverythingProvider? _everything;
+    AnytxtProvider? _anytxt;
     List<ProviderEntry> _entries = [];
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -60,11 +62,19 @@ public partial class App : Application
         // ── 装配 Provider ---------------
         // M0 只有 Everything；M3 起从 plugins 目录扫描 [UniSearchProvider] 的 dll。
         _everything = new EverythingProvider();
+        _anytxt = new AnytxtProvider();
         _entries =
         [
             new(_everything, _everything.Descriptor)
             {
                 Enabled = _settingsStore.IsProviderEnabled(EverythingProvider.ProviderId),
+            },
+            new(_anytxt, _anytxt.Descriptor)
+            {
+                // 与 Everything 同一口径：默认可用，但**不会**参与每次输入 ——
+                // 真正决定"输入时自动搜谁"的是 settings.search.autoSearchProviders（默认只有 everything）。
+                // 所以 AnyTXT 有真实开销这件事，靠的是"用户点了来源栏才搜它"，而不是把它禁用掉。
+                Enabled = _settingsStore.IsProviderEnabled(AnytxtProvider.ProviderId),
             },
         ];
 
@@ -326,6 +336,22 @@ public partial class App : Application
                 timer.Stop();
                 try { UiSelfTest.RunTemplates(vm, log); }
                 catch (Exception ex) { log.Error("selftest", "模板自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
+        // --selftest-anytxt：AnyTXT 联调（打真服务）—— 端点 / filterDir 限定 / 跨盘合并 / fid 回取。
+        // AnyTXT 没在跑时整段跳过（不是失败）。
+        if (e.Args.Contains("--selftest-anytxt", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2000) };
+            timer.Tick += async (_, _) =>
+            {
+                timer.Stop();
+                try { if (_anytxt is not null) await UiSelfTest.RunAnytxtAsync(_anytxt, log); }
+                catch (Exception ex) { log.Error("selftest", "AnyTXT 联调自检失败", ex); }
                 Quit();
             };
             timer.Start();
