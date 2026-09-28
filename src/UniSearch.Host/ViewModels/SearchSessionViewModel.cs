@@ -328,6 +328,23 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     /// </summary>
     IReadOnlyList<CategoryGroup> _groups = [];
 
+    /// <summary>
+    /// <b>标签栏的基准</b>：最近一次"没加筛选器"（即「全部」）时的分组与行。
+    /// <para>
+    /// 标签栏必须按它算，<b>不能按当前结果集算</b>：点「期刊论文」之后结果全是文献条目，
+    /// 「文档」那一组就不存在了 —— 标签跟着消失，等于<b>筛选把回去的路也一起删了</b>
+    /// （实测踩到：Zotero 下点「期刊论文」后「文档」就没了）。
+    /// 基准固定成「全部」，点任何筛选器就只改高亮、不改标签栏。
+    /// </para>
+    /// </summary>
+    IReadOnlyList<CategoryGroup> _tabGroups = [];
+
+    /// <summary>与 <see cref="_tabGroups"/> 配套的行集合（自定义筛选器的计数按它算，理由同上）。</summary>
+    readonly List<FusedResult> _tabFused = [];
+
+    /// <summary>本次查询是不是"没加任何筛选器"（是的话刷新标签栏基准）。</summary>
+    bool _tabBaselineEligible = true;
+
     /// <summary>列表最多显示多少行。来自设置（<c>search.maxRows</c>）。</summary>
     public int MaxRows { get; set; } = SearchSettings.DefaultMaxRows;
 
@@ -1006,6 +1023,9 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             ProviderScope = EffectiveProviderScope,
         };
 
+        // 只有"没加任何筛选器"的这次查询才够格刷新标签栏基准（见 _tabGroups 的注释）
+        _tabBaselineEligible = builtinCategory is null && CurrentFilter is null;
+
         IsBusy = true;
         SyntaxNotice = q.SyntaxNotice;
         ActionFeedback = null;   // 上一次动作的"已复制…"提示到此为止
@@ -1037,6 +1057,16 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         _fused.Sort((a, b) => b.Score.CompareTo(a.Score));
 
         _groups = snap.Groups;
+
+        // 标签栏基准只在"没加筛选器"时刷新。加了筛选器时保留上一次的基准，
+        // 这样点「期刊论文」不会把「文档」那个标签弄没（筛选不该删掉回去的路）。
+        if (_tabBaselineEligible)
+        {
+            _tabGroups = snap.Groups;
+            _tabFused.Clear();
+            _tabFused.AddRange(_fused);
+        }
+
         BuildTabs();
 
         Outcomes = snap.Outcomes;
@@ -1062,7 +1092,8 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     void BuildTabs()
     {
         Tabs.Clear();
-        var shown = _groups.Where(g => g.CategoryId != CategoryIds.All).ToList();
+        // 用 _tabGroups（「全部」时的基准），不是 _groups（当前可能已被筛过）
+        var shown = _tabGroups.Where(g => g.CategoryId != CategoryIds.All).ToList();
         var totalAll = shown.Sum(g => g.TotalAvailable);
         var tabs = new List<CategoryTab>
         {
@@ -1077,7 +1108,9 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         // 计数按当前结果集现算（筛选器不属于 Core 的分类体系）。
         foreach (var f in Catalog.ForTemplate(ActiveTemplate, EffectiveProviderScope))
         {
-            var count = _fused.Count(x => f.Matches(x.Display));
+            // 计数也按基准行集合算 —— 否则筛一下之后其他筛选器的计数全变 0，
+            // 看起来像"这些筛选器坏了"
+            var count = _tabFused.Count(x => f.Matches(x.Display));
             tabs.Add(new CategoryTab(f.Id, f.Name, count,
                                      f.Glyph ?? SnapshotMapper.GlyphFor(CategoryIds.More), f.Order, f));
         }
