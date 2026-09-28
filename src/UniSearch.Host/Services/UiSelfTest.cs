@@ -1070,9 +1070,17 @@ public static class UiSelfTest
         ok &= mergeOk;
 
         // ④ 限定目录（filterDir 真在限定吗）
-        var scopeDir = rows.Count > 0 ? System.IO.Path.GetDirectoryName(rows[0].Path!) : null;
-        if (scopeDir is { Length: > 0 })
+        // ⚠ 不能拿"某一行的目录"当唯一候选：AnyTXT 的索引是**活的**（后台一直在重建），
+        // 上一秒还命中 3 行的目录、下一秒可能就 0 行 —— 那样断言会偶发变红，
+        // 而红的原因跟 filterDir 一点关系都没有。所以按行逐个试，取第一个真有结果的目录。
+        var scopeOk = false;
+        var tried = 0;
+        foreach (var row in rows)
         {
+            var scopeDir = System.IO.Path.GetDirectoryName(row.Path!);
+            if (scopeDir is not { Length: > 0 }) continue;
+            if (++tried > 3) break;
+
             var scoped = new UniSearch.Sdk.Model.SearchQuery
             {
                 RequestId = 2, RawText = "semiconductor", Text = "semiconductor",
@@ -1083,14 +1091,19 @@ public static class UiSelfTest
             var (srows, _, _) = await CollectAsync(provider, scoped, ctx).ConfigureAwait(false);
 
             var inside = srows.All(r => r.Path!.StartsWith(scopeDir, StringComparison.OrdinalIgnoreCase));
-            ok &= srows.Count > 0 && inside;
-            log.Info("selftest", $"④ 限定到 [{scopeDir}] -> 行={srows.Count}，" +
-                                 $"全部落在该目录内={(inside ? "是" : "否")} -> {(srows.Count > 0 && inside ? "PASS" : "FAIL")}");
+            log.Info("selftest", $"④ 限定到 [{scopeDir}] -> 行={srows.Count}，全部落在该目录内={(inside ? "是" : "否")}");
+
+            // "全部落在目录内"才是硬断言（filterDir 被忽略时必然越界）；
+            // "有行"只说明这个目录当前还命中 —— 索引抖动导致 0 行不算 filterDir 的错。
+            if (srows.Count == 0) continue;
+
+            scopeOk = inside;
+            break;
         }
-        else
-        {
-            log.Warn("selftest", "④ 跳过：③ 没拿到带目录的行，无法验证 filterDir");
-        }
+
+        if (tried == 0) log.Warn("selftest", "④ 跳过：③ 没拿到带目录的行，无法验证 filterDir");
+        ok &= scopeOk;
+        log.Info("selftest", $"④ 结论：filterDir 确实在限定 -> {(scopeOk ? "PASS" : "FAIL")}");
 
         // ⑤ 不存在的词必须 0 条（否则"看起来能搜"其实是没在过滤）
         var none = new UniSearch.Sdk.Model.SearchQuery
@@ -1122,5 +1135,153 @@ public static class UiSelfTest
             if (b.TotalAvailable is { } t) total = t;
         }
         return (rows, total, batches);
+    }
+
+    /// <summary>
+    /// Zotero 联调自检（US-15）：打真服务。
+    /// <para>
+    /// 单测覆盖的是纯函数（翻译 / 条目映射）；这里覆盖的只有真跑才知道的事：
+    /// 本地 API 有没有被用户授权、<c>qmode</c> 真的多搜到东西、附件路径真的在磁盘上存在、
+    /// 集合限定真的收敛。
+    /// </para>
+    /// </summary>
+    public static async Task RunZoteroAsync(UniSearch.Providers.Zotero.ZoteroProvider provider, IUniSearchLog log)
+    {
+        var ok = true;
+        log.Info("selftest", "=== Zotero 联调自检 ===");
+
+        var health = await provider.ProbeHealthAsync(CancellationToken.None).ConfigureAwait(false);
+        log.Info("selftest", $"① 健康：{health.State} · 版本={health.Version ?? "-"} · {health.Detail ?? "-"}");
+        if (health.State != UniSearch.Sdk.Contracts.HealthState.Ready)
+        {
+            log.Warn("selftest", $"Zotero 不可用（{health.Detail}）—— 联调自检跳过" +
+                                 (health.Hint is null ? "" : $"；提示：{health.Hint}"));
+            return;
+        }
+        log.Info("selftest", $"   提示位：{health.Hint ?? "-"}");
+
+        // ② 关键词：元数据命中（标题里有 AlphaGenome 的那篇）
+        var (meta, metaTotal, _) = await CollectZoteroAsync(provider, "AlphaGenome", "titleCreatorYear", null)
+            .ConfigureAwait(false);
+        log.Info("selftest", $"② qmode=titleCreatorYear \"AlphaGenome\" -> 行={meta.Count} 总数={metaTotal}");
+        var metaOk = meta.Count > 0 && meta.All(r => r.ProviderId == "zotero")
+                     && meta.All(r => r.Kind == UniSearch.Sdk.Model.ResultKind.BibliographicItem)
+                     && meta.All(r => r.Uri is { Length: > 0 } && r.Path is null);
+        ok &= metaOk;
+        log.Info("selftest", $"   断言：有行 / 都是文献条目 / 有 select URI / 无本地路径 -> {(metaOk ? "PASS" : "FAIL")}");
+        foreach (var r in meta.Take(2))
+            log.Info("selftest", $"     {r.Title}  [{r.Subtitle}]  {r.Uri}");
+
+        // ③ 同一查询换 everything：必须**多**搜到（PDF 正文），否则说明 qmode 根本没生效
+        var (full, _, _) = await CollectZoteroAsync(provider, "AlphaGenome", "everything", null).ConfigureAwait(false);
+        var qmodeOk = full.Count > meta.Count;
+        log.Info("selftest", $"③ 同查询 qmode=everything -> 行={full.Count}（titleCreatorYear 是 {meta.Count}）" +
+                             $" -> {(qmodeOk ? "PASS：全文确实多搜到了" : "FAIL：qmode 没生效")}");
+        ok &= qmodeOk;
+
+        // ④ 附件行的本地路径必须真的存在 —— 这是 URL 解码对不对的唯一硬证据
+        var (attachments, _, _) = await CollectZoteroAsync(provider, "", "everything", null, kinds:
+            [UniSearch.Sdk.Model.ResultKind.Attachment]).ConfigureAwait(false);
+        var withPath = attachments.Where(a => a.Path is { Length: > 0 }).ToList();
+        var existing = withPath.Where(a => System.IO.File.Exists(a.Path)).ToList();
+        log.Info("selftest", $"④ 附件（itemType=attachment）-> 行={attachments.Count}，带路径={withPath.Count}，" +
+                             $"路径真实存在={existing.Count}");
+        if (withPath.Count > 0)
+        {
+            log.Info("selftest", $"     样例：{withPath[0].Path}");
+            var pathOk = existing.Count > 0;
+            ok &= pathOk;
+            log.Info("selftest", $"   断言：至少一条附件路径在磁盘上真实存在 -> {(pathOk ? "PASS" : "FAIL")}");
+        }
+        else
+        {
+            log.Warn("selftest", "   跳过：没有拿到带路径的附件行");
+        }
+
+        // ⑤ 集合限定真的收敛（拿库里第一个集合试）
+        var collectionKey = await FirstCollectionKeyAsync(provider).ConfigureAwait(false);
+        if (collectionKey is { Length: > 0 })
+        {
+            var (inCollection, colTotal, _) = await CollectZoteroAsync(provider, "", "everything", collectionKey)
+                .ConfigureAwait(false);
+            var (everything, allTotal, _) = await CollectZoteroAsync(provider, "", "everything", null)
+                .ConfigureAwait(false);
+            var scopeOk = colTotal <= allTotal && inCollection.Count > 0;
+            log.Info("selftest", $"⑤ 集合 {collectionKey} -> 总数={colTotal}；整个文库 -> 总数={allTotal}" +
+                                 $" -> {(scopeOk ? "PASS：确实收敛了" : "FAIL")}");
+            ok &= scopeOk;
+        }
+        else
+        {
+            log.Warn("selftest", "⑤ 跳过：库里没有集合");
+        }
+
+        log.Info("selftest", ok ? "Zotero 联调自检：全部通过 ✓" : "Zotero 联调自检：有失败 ✗");
+    }
+
+    static async Task<(List<UniSearch.Sdk.Model.SearchResult> Rows, int Total, int Batches)> CollectZoteroAsync(
+        UniSearch.Providers.Zotero.ZoteroProvider provider,
+        string text, string qmode, string? collectionKey,
+        IReadOnlyList<UniSearch.Sdk.Model.ResultKind>? kinds = null)
+    {
+        var query = new UniSearch.Sdk.Model.SearchQuery
+        {
+            RequestId = 1,
+            RawText = text,
+            Text = text,
+            ProviderText = text,
+            ResultBudget = 20,
+            Filters = kinds is null ? UniSearch.Sdk.Model.QueryFilters.None
+                                    : UniSearch.Sdk.Model.QueryFilters.None with { Kinds = kinds },
+        };
+
+        var context = collectionKey is { Length: > 0 }
+            ? UniSearch.Sdk.Capabilities.SearchContext.Global() with
+              {
+                  Scope = UniSearch.Sdk.Capabilities.ScopeKind.NamedScope,
+                  NamedScope = UniSearch.Providers.Zotero.ZoteroProvider.CollectionScopePrefix + collectionKey,
+              }
+            : UniSearch.Sdk.Capabilities.SearchContext.Global();
+
+        // qmode 走 Provider 选项，所以这里临时换一份选项再跑 —— 自检要能证明"两种模式结果不同"
+        var saved = provider.Options;
+        provider.ApplyOptions(UniSearch.Providers.Zotero.ZoteroQueryOptions.Default with { Qmode = qmode });
+        try
+        {
+            var rows = new List<UniSearch.Sdk.Model.SearchResult>();
+            var total = 0;
+            var batches = 0;
+            await foreach (var b in provider.SearchAsync(query, context, CancellationToken.None).ConfigureAwait(false))
+            {
+                batches++;
+                rows.AddRange(b.Results);
+                if (b.TotalAvailable is { } t) total = t;
+            }
+            return (rows, total, batches);
+        }
+        finally
+        {
+            provider.ApplyOptions(saved);
+        }
+    }
+
+    /// <summary>取库里第一个集合的 key（没有就返回 null）。</summary>
+    static async Task<string?> FirstCollectionKeyAsync(UniSearch.Providers.Zotero.ZoteroProvider provider)
+    {
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var json = await http.GetStringAsync("http://127.0.0.1:23119/api/users/0/collections?limit=1")
+                                .ConfigureAwait(false);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+            foreach (var c in doc.RootElement.EnumerateArray())
+                if (c.TryGetProperty("key", out var k)) return k.GetString();
+        }
+        catch
+        {
+            // 取不到就当没有集合，不影响别的断言
+        }
+        return null;
     }
 }

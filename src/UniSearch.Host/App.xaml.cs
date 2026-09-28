@@ -11,6 +11,7 @@ using UniSearch.Host.ViewModels;
 using UniSearch.Host.Views;
 using UniSearch.Providers.Anytxt;
 using UniSearch.Providers.Everything;
+using UniSearch.Providers.Zotero;
 using UniSearch.Sdk.Capabilities;
 using UniSearch.Sdk.Runtime;
 
@@ -32,6 +33,7 @@ public partial class App : Application
     MainWindow? _win;
     EverythingProvider? _everything;
     AnytxtProvider? _anytxt;
+    ZoteroProvider? _zotero;
     List<ProviderEntry> _entries = [];
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -63,6 +65,7 @@ public partial class App : Application
         // M0 只有 Everything；M3 起从 plugins 目录扫描 [UniSearchProvider] 的 dll。
         _everything = new EverythingProvider();
         _anytxt = new AnytxtProvider();
+        _zotero = new ZoteroProvider();
         _entries =
         [
             new(_everything, _everything.Descriptor)
@@ -75,6 +78,12 @@ public partial class App : Application
                 // 真正决定"输入时自动搜谁"的是 settings.search.autoSearchProviders（默认只有 everything）。
                 // 所以 AnyTXT 有真实开销这件事，靠的是"用户点了来源栏才搜它"，而不是把它禁用掉。
                 Enabled = _settingsStore.IsProviderEnabled(AnytxtProvider.ProviderId),
+            },
+            new(_zotero, _zotero.Descriptor)
+            {
+                // 同理：默认可用、默认不自动参与。它还有个额外好处 ——
+                // Zotero 没开时调度器会按健康状态跳过，不会让每次输入都卡在探测上。
+                Enabled = _settingsStore.IsProviderEnabled(ZoteroProvider.ProviderId),
             },
         ];
 
@@ -352,6 +361,22 @@ public partial class App : Application
                 timer.Stop();
                 try { if (_anytxt is not null) await UiSelfTest.RunAnytxtAsync(_anytxt, log); }
                 catch (Exception ex) { log.Error("selftest", "AnyTXT 联调自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
+        // --selftest-zotero：Zotero 联调（打真服务）—— 授权状态 / qmode 差异 / 附件真实路径 / 集合限定。
+        // Zotero 没在跑或没授权时整段跳过（不是失败）。
+        if (e.Args.Contains("--selftest-zotero", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2000) };
+            timer.Tick += async (_, _) =>
+            {
+                timer.Stop();
+                try { if (_zotero is not null) await UiSelfTest.RunZoteroAsync(_zotero, log); }
+                catch (Exception ex) { log.Error("selftest", "Zotero 联调自检失败", ex); }
                 Quit();
             };
             timer.Start();
