@@ -1327,6 +1327,76 @@ D1 排查可以从这里入手（超时判定发生在哪一层、为什么不�
 
 ---
 
+## 2026-09-28 第 13 轮（筛选器模板 F0：schema + 合并 + 解析链，纯 Core）
+
+### 本轮目标
+
+接 [US-13]（任务 `TASK-2026-09-27-07`）的 **F0**：`filters.json` v2 的 `templates` 节 ——
+schema + 两文件独立合并 + 激活解析链 + 兼容回退。**只动 Core**，不碰 UI、不碰匹配语义。
+依据 `docs/spec/FILTER-TEMPLATES.md`（本轮随文档一起入库 git）。
+
+### 状态总览
+
+| 事项 | 状态 | 验证方式 |
+|---|---|---|
+| 3 份未入库文档提交 | ✅ | `4b182ae` / `2606d21` / `704ea83` |
+| `FilterTemplate` 记录 + v2 schema | ✅ | `src/UniSearch.Core/Filters/FilterTemplate.cs` |
+| 两文件**独立**合并（filters 与 templates 各自合并） | ✅ | 单测 ×1 |
+| 引用校验 / `defaultFor` 冲突 | ✅ | 单测 ×2 |
+| 激活解析链（钉住 → 部署级 → `defaultFor` → `"*"` → 平铺） | ✅ | 单测 ×1 |
+| 双重显隐 + 模板内引用顺序 | ✅ | 单测 ×1 |
+| **没写 `templates` 节 = 现状** | ✅ | 单测 ×1（逐项比对 `For` 与 `ForTemplate(null, …)`） |
+| 单测 | **112/112**（原 106 + 6） | `dotnet test -c Debug` |
+| F1（UI 锚点 / 钉住 / 设置窗） | ⬜ 下一轮 | — |
+| F2（热重载） | ⬜ | — |
+| F3（下推映射 + Zotero 模板） | ⬜ 与 Zotero Provider 同期 | — |
+
+### 已完成并验证
+
+- **`FilterTemplate`**（新文件）：`id` / `name` / `order` / `filters` / `defaultFor` / `providers`，
+  只引用不复制；`AvailableFor(providerId)` 管"下拉里出不出来"，`DefaultFor` 管"认领谁是默认"。
+- **`FilterFile.Templates` 声明成 `List<FilterTemplate>?`**：`null` = 这个文件根本没写这个节 ——
+  与"写了空数组"必须区分开，否则"没写 = 回退现状"这条保证根本没法表达。
+- **合并**：`filters` 与 `templates` **各自独立合并**（同 id 后者整条覆盖，不做字段级合并）。
+  用户文件只写 `filters` 时，程序模板的 `templates` 照样生效。
+- **校验放在全部文件合并完之后**：程序模板引用的定义可能只在用户那份文件里（或反过来），
+  边读边校验会把合法引用误判成"不存在"。引用不存在 → 剔除该引用 + 记问题（**不**整条丢模板）；
+  两个模板抢同一个后端 → order 小者胜 + 记问题。
+- **解析链** `ResolveTemplate(providerId, pinned, deployment)`：钉住 → 部署级 → `defaultFor` 认领
+  → `defaultFor: ["*"]` → **null（回退平铺）**。认不出的 id 不生效、直接往下一步走 ——
+  设置里钉的模板被删掉时，不该把标签栏变空。
+- **`ForTemplate(template, providerIds)`**：模板引用 ∩ 显隐规则，顺序以模板里的**引用先后**为准
+  （模板存在的意义就是"有序引用"）。`template` 为 null 时直接转 `For`，平铺那条路径一行没改。
+- **程序自带的 `filters.json` 本轮刻意不加 `templates` 节** —— UI 还没做，加了就等于替用户做了决定；
+  保持"没节 = 现状"才能让 F0 零行为变化地进主干。
+
+### 未完成 / 下次从这里继续
+
+- **F1**：模板锚点控件（标签栏最左）+ 切换 + 钉住/恢复默认 + `EffectiveProviderScope` 自动跟随
+  + `settings.filterTemplates.<pid>` 持久化；`--selftest-filters` 扩展程序化断言。
+- **F2**：`FileSystemWatcher` 热重载（吸收遗留 C3）。
+- **F3**：下推映射 + Zotero 模板示例（与 [US-15] Zotero Provider 同期）。
+- **待拍板**：多后端来源（`EffectiveProviderScope` 有多个 id）时锚点该显示哪个模板 ——
+  设计文档没定。Core 现在只按"一个 providerId"解析，全局视图走 `"*"`，F1 开工前要给个口径。
+
+### 新踩的坑
+
+1. **`"*"` 不能过筛选器那套 id 规范化**：`NormalizeId` 把非字母数字一律换成 `-`，
+   `defaultFor: ["*"]` 会变成 `"-"`，全局兜底静默失效。后端 token 得单独走
+   `NormalizeProviderToken`（保留 `*`）。而模板**引用**上正好相反 —— 模板里写 `"Bio Info"`
+   必须规范化成 `bio-info` 才引用得到，否则是"看着写对了却引用不到"。
+2. **`if (file?.Filters is null) continue;` 会顺手吃掉 templates**：那个早退是按"filters 是必填节"
+   写的，加了可选节之后它就成了 bug 源 —— 文件里只写 `templates` 时整份被跳过。
+   改成 `foreach (var raw in file.Filters ?? [])` 才对。
+
+### 验证手段变化
+
+- `dotnet test`：106 → **112**。新增 6 条覆盖：无节回退（逐项比对）、合并与覆盖、引用校验、
+  `defaultFor` 冲突、解析链优先级、双重显隐与引用顺序。
+- **未新增 `--selftest-*`**：F0 是纯 Core 层，UI 还没有模板概念，Host 侧自检等 F1 一起加。
+
+---
+
 ## 模板（下次追加）
 
 ```markdown
