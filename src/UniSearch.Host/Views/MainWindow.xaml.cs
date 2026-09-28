@@ -932,6 +932,19 @@ public partial class MainWindow : Window
     public Action<ColumnsSettings>? PersistLayout { get; set; }
 
     /// <summary>
+    /// 点模板锚点 = 弹下拉。用 ContextMenu 而不是 ComboBox：下拉里既有"选模板"又有
+    /// "跟随后端默认"这类动作，菜单天然表达得了，而且不用额外占标签栏的宽度。
+    /// </summary>
+    void OnTemplateAnchorClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.ContextMenu is null) return;
+        button.ContextMenu.PlacementTarget = button;
+        button.ContextMenu.Placement = PlacementMode.Bottom;
+        button.ContextMenu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    /// <summary>
     /// 热键唤出：推到前台 + 全选原查询（跟 Everything 一致 —— 唤出即替换，不用先清空）。
     /// </summary>
     public void Summon()

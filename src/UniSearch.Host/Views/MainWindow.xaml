@@ -153,16 +153,76 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <!-- 筛选行：内容随当前来源变化（每个后端可以有自己的筛选器集）。
+                <!-- 筛选行：内容随当前来源与<b>模板</b>变化（每个后端可以有自己的筛选器集与默认模板）。
                      用 WrapPanel 而不是横向滚动：滚动条会吃掉一行高度，而且"有标签被藏在右边"
-                     用户根本看不出来；换行最多多占一行，但一个都不会丢。 -->
-                <ItemsControl Grid.Row="0" ItemsSource="{Binding Tabs}"
-                              ItemTemplate="{StaticResource CategoryTabTemplate}"
-                              Margin="0,0,0,2" Focusable="False">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><WrapPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                </ItemsControl>
+                     用户根本看不出来；换行最多多占一行，但一个都不会丢。
+                     DockPanel 是为了把"模板锚点"固定在标签栏最左 —— 它不该跟着标签一起换行。 -->
+                <DockPanel Grid.Row="0" Margin="0,0,0,2">
+                    <!-- 模板锚点：显示当前模板名，点一下弹下拉。没有 templates 节时整块不显示
+                         （升级第一天不该多出一个按不动的按钮）。 -->
+                    <Button DockPanel.Dock="Left" x:Name="TemplateAnchor" Style="{x:Null}"
+                            Margin="0,0,4,1" Padding="6,1" Cursor="Hand" MinWidth="0"
+                            Visibility="{Binding HasTemplates, Converter={StaticResource BoolToVis}}"
+                            ToolTip="{Binding TemplateAnchorTip}"
+                            Click="OnTemplateAnchorClick"
+                            FontFamily="{StaticResource Font.Text}" FontSize="{StaticResource Font.Size.FilterTab}"
+                            Foreground="{StaticResource Brush.Text.Primary}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Ta" CornerRadius="{StaticResource Radius.Default}"
+                                        Background="{StaticResource Brush.Chip.Neutral}"
+                                        Padding="{TemplateBinding Padding}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE71C;" FontFamily="{StaticResource Glyph.Font}"
+                                                   FontSize="11" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource Brush.Text.Secondary}"/>
+                                        <ContentPresenter Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Ta" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <Button.ContextMenu>
+                            <!-- ContextMenu 有自己的可视树、绑不到 Window，所以经 PlacementTarget 取回 VM
+                                 （和结果行的右键菜单同一套办法）。 -->
+                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                <MenuItem Header="筛选器模板" IsEnabled="False" FontWeight="Bold"/>
+                                <Separator/>
+                                <MenuItem ItemsSource="{Binding TemplateOptions}">
+                                    <MenuItem.ItemContainerStyle>
+                                        <Style TargetType="MenuItem">
+                                            <Setter Property="Header" Value="{Binding Name}"/>
+                                            <Setter Property="IsCheckable" Value="True"/>
+                                            <Setter Property="IsChecked" Value="{Binding IsActive, Mode=OneWay}"/>
+                                            <Setter Property="ToolTip" Value="{Binding TooltipText}"/>
+                                            <Setter Property="Command"
+                                                    Value="{Binding DataContext.SelectTemplateCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                            <Setter Property="CommandParameter" Value="{Binding Id}"/>
+                                        </Style>
+                                    </MenuItem.ItemContainerStyle>
+                                </MenuItem>
+                                <Separator/>
+                                <MenuItem Header="跟随后端默认(_D)" IsCheckable="True"
+                                          IsChecked="{Binding TemplateFollowsDefault, Mode=OneWay}"
+                                          ToolTip="{Binding ResetTemplateTip}"
+                                          Command="{Binding ResetTemplateCommand}"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                        <TextBlock Text="{Binding TemplateLabel}"/>
+                    </Button>
+
+                    <ItemsControl ItemsSource="{Binding Tabs}"
+                                  ItemTemplate="{StaticResource CategoryTabTemplate}"
+                                  Focusable="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </DockPanel>
 
                 <Grid Grid.Row="1">
                     <ListView x:Name="ResultList"

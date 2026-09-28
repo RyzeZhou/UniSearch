@@ -322,6 +322,12 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     /// </summary>
     readonly List<FusedResult> _fused = [];
 
+    /// <summary>
+    /// 最近一次快照里的分类分组。留着它是因为<b>模板切换要能重建标签栏而不重跑搜索</b> ——
+    /// 标签栏 = 内置分类（来自快照的分组）+ 自定义筛选器（来自模板），只有后者会变。
+    /// </summary>
+    IReadOnlyList<CategoryGroup> _groups = [];
+
     /// <summary>列表最多显示多少行。来自设置（<c>search.maxRows</c>）。</summary>
     public int MaxRows { get; set; } = SearchSettings.DefaultMaxRows;
 
@@ -489,6 +495,8 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             s.IsActive = string.Equals(s.Id, value, StringComparison.OrdinalIgnoreCase);
         OnPropertyChanged(nameof(SourceLabel));
         OnPropertyChanged(nameof(StatusText));
+        // 换了来源 → 标签栏要按新后端重解析模板（没被钉住时就跟着走）
+        RefreshTemplate(reSearch: false);
         _ = RunAsync();
     }
 
@@ -502,6 +510,8 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         foreach (var s in Sources)
             s.IsDefaultAuto = AutoSearchProviders.Contains(s.Id, StringComparer.OrdinalIgnoreCase);
         OnPropertyChanged(nameof(SourceLabel));
+        // 默认来源集合变了 → "有没有某一个后端"也可能变了，模板要重解析
+        RefreshTemplate(reSearch: false);
     }
 
     /// <summary>本次查询实际要问的后端（null = 不限制，全部合格后端都问）。</summary>
@@ -533,12 +543,157 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     /// <summary>最近一次查询用的自定义筛选器名（null = 用的内置分类）。</summary>
     public string? LastFilterLabel { get; private set; }
 
+    // ── 筛选器模板（filters.json v2）──────────────────────────────────────────
+    // 模板只决定"标签栏里显示哪几个、按什么顺序"，不碰匹配语义；没有任何模板时
+    // ForTemplate 走平铺，与加模板之前逐项一致。
+
+    Dictionary<string, string> _pinnedTemplates = new(StringComparer.OrdinalIgnoreCase);
+    Dictionary<string, string> _deploymentTemplates = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>没有"某一个后端"可归属时的手动选择（没地方钉，所以只作用于本次会话）。</summary>
+    string? _sessionTemplateId;
+
+    /// <summary>宿主注入：钉住 / 恢复默认时落盘（providerId → 模板 id；null = 删掉这个键）。</summary>
+    public Action<string, string?>? PersistPinnedTemplate { get; set; }
+
+    /// <summary>
+    /// 解析模板时要认的后端，<b>只有限定到某一个时才认</b>。
+    /// 来源栏是单选，所以常态就是一个；"没限定、但默认集合恰好只有一个"也算。
+    /// 默认集合填了多个、或清空（不限制全部来源）时返回 null —— 那时没有"某个后端"可言，
+    /// 解析链落到 <c>"*"</c> 兜底，再没有就平铺。<b>刻意不为多后端设计模板语义。</b>
+    /// </summary>
+    public string? TemplateProviderId =>
+        ActiveSourceId is { Length: > 0 } id ? id
+        : AutoSearchProviders.Count == 1 ? AutoSearchProviders[0]
+        : null;
+
+    /// <summary>当前生效的模板（null = 平铺，与文件里没有 templates 节时一致）。</summary>
+    public FilterTemplate? ActiveTemplate { get; private set; }
+
+    /// <summary>有没有模板可切 —— 没有就连锚点都不显示（升级第一天不该多出一个没用的按钮）。</summary>
+    public bool HasTemplates => Catalog.Templates.Count > 0;
+
+    /// <summary>锚点上显示的模板名。</summary>
+    public string TemplateLabel => ActiveTemplate?.Name ?? "默认标签";
+
+    /// <summary>当前模板是不是用户钉住的（锚点提示用）。</summary>
+    public bool IsTemplatePinned =>
+        TemplateProviderId is { Length: > 0 } pid && _pinnedTemplates.ContainsKey(pid);
+
+    /// <summary>没钉住 = 跟着解析链走（下拉里"跟随后端默认"那条就是当前状态）。</summary>
+    public bool TemplateFollowsDefault => !IsTemplatePinned;
+
+    /// <summary>
+    /// 锚点按钮的提示。必须说清"这个模板是怎么来的" —— 否则用户切了来源发现标签栏自己变了，
+    /// 会以为是 bug 而不是"跟随默认"。
+    /// </summary>
+    public string TemplateAnchorTip => ActiveTemplate is null
+        ? "当前没有模板生效，标签栏按定义文件平铺"
+        : IsTemplatePinned ? $"模板「{ActiveTemplate.Name}」（已钉住：切来源不会自动跟随）"
+        : TemplateProviderId is { Length: > 0 } pid
+            ? $"模板「{ActiveTemplate.Name}」（跟随 {SnapshotMapper.Pretty(pid)} 自动切换）"
+            : $"模板「{ActiveTemplate.Name}」（全局默认）";
+
+    /// <summary>"跟随后端默认"那条的提示。</summary>
+    public string ResetTemplateTip => "取消钉住，回到「后端认领 → \"*\" 兜底 → 平铺」这条解析链";
+
+    /// <summary>锚点下拉里的条目（当前后端可选的模板；"跟随后端默认"是固定追加的一条）。</summary>
+    public ObservableCollection<TemplateOption> TemplateOptions { get; } = [];
+
+    /// <summary>当前钉住表（自检要能原样还原，所以暴露成只读）。</summary>
+    public IReadOnlyDictionary<string, string> PinnedTemplates => _pinnedTemplates;
+
+    /// <summary>当前部署级默认表（同上）。</summary>
+    public IReadOnlyDictionary<string, string> DeploymentTemplates => _deploymentTemplates;
+
+    /// <summary>宿主注入钉住表与部署级默认（<c>settings.filterTemplates</c> / <c>providers.*.options.filterTemplate</c>）。</summary>
+    public void SetFilterTemplates(IReadOnlyDictionary<string, string>? pinned,
+                                   IReadOnlyDictionary<string, string>? deployment)
+    {
+        _pinnedTemplates = pinned is null ? new(StringComparer.OrdinalIgnoreCase)
+                                          : new(pinned, StringComparer.OrdinalIgnoreCase);
+        _deploymentTemplates = deployment is null ? new(StringComparer.OrdinalIgnoreCase)
+                                                  : new(deployment, StringComparer.OrdinalIgnoreCase);
+        RefreshTemplate(reSearch: false);
+    }
+
+    /// <summary>用户在下拉里选了模板：单一后端时钉住并落盘，否则只作用于本次会话。</summary>
+    [RelayCommand]
+    void SelectTemplate(string? id)
+    {
+        if (Catalog.FindTemplate(id) is null) return;
+
+        if (TemplateProviderId is { Length: > 0 } pid)
+        {
+            _pinnedTemplates[pid] = id!;
+            PersistPinnedTemplate?.Invoke(pid, id);
+        }
+        else
+        {
+            _sessionTemplateId = id;
+        }
+        RefreshTemplate(reSearch: false);
+    }
+
+    /// <summary>恢复默认：删掉钉住，回到解析链（后端认领 → <c>"*"</c> → 平铺）。</summary>
+    [RelayCommand]
+    void ResetTemplate()
+    {
+        _sessionTemplateId = null;
+        if (TemplateProviderId is { Length: > 0 } pid && _pinnedTemplates.Remove(pid))
+            PersistPinnedTemplate?.Invoke(pid, null);
+        RefreshTemplate(reSearch: false);
+    }
+
+    /// <summary>
+    /// 重算当前模板并重建标签栏。<b>不重跑搜索</b> —— 切模板只是"标签栏显示哪几个"，
+    /// 结果集与查询串都不变。唯一的例外见下面那段：当前选中的自定义筛选器被新模板藏掉了。
+    /// </summary>
+    void RefreshTemplate(bool reSearch)
+    {
+        var pid = TemplateProviderId;
+
+        ActiveTemplate = pid is null && _sessionTemplateId is { Length: > 0 } sid
+            ? Catalog.FindTemplate(sid)
+            : Catalog.ResolveTemplate(pid, Lookup(_pinnedTemplates, pid), Lookup(_deploymentTemplates, pid));
+
+        RebuildTemplateOptions();
+        OnPropertyChanged(nameof(ActiveTemplate));
+        OnPropertyChanged(nameof(HasTemplates));
+        OnPropertyChanged(nameof(TemplateLabel));
+        OnPropertyChanged(nameof(IsTemplatePinned));
+        OnPropertyChanged(nameof(TemplateFollowsDefault));
+        OnPropertyChanged(nameof(TemplateAnchorTip));
+
+        BuildTabs();
+
+        // 当前选中的自定义筛选器被新模板藏掉了 → 退回「全部」。
+        // 不处理的话标签栏里一个高亮的都没有，但查询串还在按那个筛选器过滤 ——
+        // 用户看到的是"结果莫名其妙少了一大截"，最难查的那种坏法。
+        if (CurrentFilter is not null && Tabs.All(t => t.Id != SelectedTabId))
+            SelectedTabId = CategoryIds.All;   // setter 里会重跑一次
+        else if (reSearch)
+            _ = RunAsync();
+    }
+
+    void RebuildTemplateOptions()
+    {
+        TemplateOptions.Clear();
+        foreach (var t in Catalog.TemplatesFor(TemplateProviderId))
+            TemplateOptions.Add(new TemplateOption(t.Id, t.Name, t.Id == ActiveTemplate?.Id, IsTemplatePinned));
+        // "跟随后端默认"不在这里 —— 它是固定追加的一条，绑 ResetTemplateCommand，
+        // 而这里的每条都绑 SelectTemplateCommand（参数是模板 id）。混在一起就得靠 null 分派，更绕。
+    }
+
+    static string? Lookup(Dictionary<string, string> map, string? key) =>
+        key is { Length: > 0 } && map.TryGetValue(key, out var v) && v.Length > 0 ? v : null;
+
     /// <summary>宿主加载完 filters.json 后注入（改文件后重启程序生效）。</summary>
     public void SetFilterCatalog(FilterCatalog catalog)
     {
         Catalog = catalog;
         OnPropertyChanged(nameof(Catalog));
-        _ = RunAsync();   // 标签栏与过滤条件都变了，重跑一次
+        RefreshTemplate(reSearch: true);   // 标签栏与过滤条件都变了，重跑一次
     }
 
     [RelayCommand]
@@ -771,6 +926,11 @@ public sealed partial class SearchSessionViewModel : ObservableObject
 
     long _requestCounter;
 
+    /// <summary>
+    /// 已发起的查询次数。给自检用 —— 像"切模板不该重查"这种承诺，只有能数出来才验得了。
+    /// </summary>
+    public long SearchRequestCount => Interlocked.Read(ref _requestCounter);
+
     public void SetContext(SearchContext ctx)
     {
         Context = ctx;
@@ -863,36 +1023,8 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         foreach (var g in snap.Groups) _fused.AddRange(g.Items);
         _fused.Sort((a, b) => b.Score.CompareTo(a.Score));
 
-        Tabs.Clear();
-        var shown = snap.Groups.Where(g => g.CategoryId != CategoryIds.All).ToList();
-        var totalAll = shown.Sum(g => g.TotalAvailable);
-        var tabs = new List<CategoryTab>
-        {
-            new(CategoryIds.All, "全部", totalAll, SnapshotMapper.GlyphFor(CategoryIds.All), 0),
-        };
-        foreach (var g in shown)
-            tabs.Add(new CategoryTab(g.CategoryId, g.DisplayName, g.TotalAvailable,
-                                     SnapshotMapper.GlyphFor(g.CategoryId), CategoryEngine.OrderOf(g.CategoryId)));
-
-        // 自定义筛选器（filters.json）：只列<b>当前来源适用</b>的那些 ——
-        // 这就是"不同后端用不同筛选器"的落点。计数按当前结果集现算（筛选器不属于 Core 的分类体系）。
-        foreach (var f in Catalog.For(EffectiveProviderScope))
-        {
-            var count = _fused.Count(x => f.Matches(x.Display));
-            tabs.Add(new CategoryTab(f.Id, f.Name, count,
-                                     f.Glyph ?? SnapshotMapper.GlyphFor(CategoryIds.More), f.Order, f));
-        }
-
-        tabs.Sort((a, b) => a.Order.CompareTo(b.Order));
-
-        // 恢复选中：keep 旧选择（若快照仍有该分类），否则回"全部"。
-        // 注意只能在这里统一 Add —— 先前若已 Tabs.Add 过一次，标签就会重复出现（实测出现过两个「全部」）。
-        var selId = SelectedTabId;
-        foreach (var t in tabs)
-        {
-            t.IsSelectedTab = t.Id == selId;
-            Tabs.Add(t);
-        }
+        _groups = snap.Groups;
+        BuildTabs();
 
         Outcomes = snap.Outcomes;
         OnPropertyChanged(nameof(Outcomes));
@@ -905,6 +1037,50 @@ public sealed partial class SearchSessionViewModel : ObservableObject
                          $"排序={ResultSort.ToConfigName(SortKey)}{(SortDescending ? "↓" : "↑")} " +
                          $"可见列=[{string.Join(",", Columns.Where(c => c.IsVisible).Select(c => c.Key))}] " +
                          $"选中={(Selected?.Title ?? "null")}");
+    }
+
+    /// <summary>
+    /// 重建标签栏：内置分类（来自最近一次快照的分组）+ 自定义筛选器（来自当前模板与来源）。
+    /// <para>
+    /// <b>为什么从 <see cref="Apply"/> 里拆出来</b>：模板切换只影响后半截，逼着重新搜一次
+    /// 既慢又没必要（切模板不改查询串）。拆出来之后两条路径共用同一段逻辑，不会各自跑偏。
+    /// </para>
+    /// </summary>
+    void BuildTabs()
+    {
+        Tabs.Clear();
+        var shown = _groups.Where(g => g.CategoryId != CategoryIds.All).ToList();
+        var totalAll = shown.Sum(g => g.TotalAvailable);
+        var tabs = new List<CategoryTab>
+        {
+            new(CategoryIds.All, "全部", totalAll, SnapshotMapper.GlyphFor(CategoryIds.All), 0),
+        };
+        foreach (var g in shown)
+            tabs.Add(new CategoryTab(g.CategoryId, g.DisplayName, g.TotalAvailable,
+                                     SnapshotMapper.GlyphFor(g.CategoryId), CategoryEngine.OrderOf(g.CategoryId)));
+
+        // 自定义筛选器（filters.json）：只列<b>当前模板与来源下可见</b>的那些 ——
+        // 这就是"不同后端用不同筛选器"的落点。没有模板时 ForTemplate 走平铺，与从前一致。
+        // 计数按当前结果集现算（筛选器不属于 Core 的分类体系）。
+        foreach (var f in Catalog.ForTemplate(ActiveTemplate, EffectiveProviderScope))
+        {
+            var count = _fused.Count(x => f.Matches(x.Display));
+            tabs.Add(new CategoryTab(f.Id, f.Name, count,
+                                     f.Glyph ?? SnapshotMapper.GlyphFor(CategoryIds.More), f.Order, f));
+        }
+
+        // 模板内顺序已由 ForTemplate 按"引用先后"给出，但内置分类仍按 order 排 ——
+        // 所以这里只给自定义筛选器保持相对次序：OrderBy 是稳定的。
+        tabs.Sort((a, b) => a.Order.CompareTo(b.Order));
+
+        // 恢复选中：keep 旧选择（若快照仍有该分类），否则回"全部"。
+        // 注意只能在这里统一 Add —— 先前若已 Tabs.Add 过一次，标签就会重复出现（实测出现过两个「全部」）。
+        var selId = SelectedTabId;
+        foreach (var t in tabs)
+        {
+            t.IsSelectedTab = t.Id == selId;
+            Tabs.Add(t);
+        }
     }
 
 
@@ -1264,4 +1440,14 @@ public sealed record BackendTarget(string ProviderId, string Name)
 {
     public string TooltipText => $"在 {Name} 中打开当前搜索";
     public string Glyph => "\uE8A7";   // Segoe：OpenInNewWindow 语义
+}
+
+/// <summary>
+/// 模板锚点下拉里的一条。<c>Id</c> 是模板 id，直接当 <c>SelectTemplateCommand</c> 的参数。
+/// </summary>
+public sealed record TemplateOption(string Id, string Name, bool IsActive, bool IsPinned)
+{
+    public string TooltipText => IsActive
+        ? IsPinned ? "当前模板（已钉住：切来源不会自动跟随）" : "当前模板"
+        : $"切换到「{Name}」";
 }

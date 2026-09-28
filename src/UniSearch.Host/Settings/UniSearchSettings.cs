@@ -35,6 +35,15 @@ public sealed class UniSearchSettings
     /// <summary>多选批量动作（第 12 轮）：压缩包放哪、怎么命名、完成后是否定位。</summary>
     public ArchiveSettings Archive { get; set; } = new();
 
+    /// <summary>
+    /// 用户<b>钉住</b>的筛选器模板：<c>providerId → 模板 id</c>（<c>settings.filterTemplates.&lt;pid&gt;</c>）。
+    /// <para>
+    /// 有这个键 = 该后端不再自动跟随默认模板（切来源时标签栏不跟着变）；
+    /// 删掉这个键 = 恢复默认，回到"后端认领 → <c>"*"</c> 兜底 → 平铺"这条解析链。
+    /// </para>
+    /// </summary>
+    public Dictionary<string, string> FilterTemplates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>按 Provider id 分节；Provider 通过 <c>IProviderRuntime.Settings</c> 读自己那一节。</summary>
     public Dictionary<string, ProviderSettings> Providers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -61,6 +70,19 @@ public sealed class UniSearchSettings
         Search.Normalize();
         Columns.Normalize();
         Archive.Normalize();
+
+        // 钉住的模板：键值都规范成小写；空的直接删掉 —— "钉了一个空串"与"没钉"是一回事，
+        // 留着它只会让 IsTemplatePinned 说谎。
+        FilterTemplates ??= new(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in FilterTemplates.Keys.ToList())
+        {
+            var pid = (key ?? string.Empty).Trim().ToLowerInvariant();
+            var tpl = (FilterTemplates[key] ?? string.Empty).Trim().ToLowerInvariant();
+            FilterTemplates.Remove(key);
+            if (pid.Length == 0 || tpl.Length == 0) continue;
+            FilterTemplates[pid] = tpl;
+        }
+
         Version = CurrentVersion;
     }
 

@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using UniSearch.Core.Archiving;
 using UniSearch.Core.Categories;
+using UniSearch.Core.Filters;
 using UniSearch.Host.Settings;
 using UniSearch.Host.ViewModels;
 using UniSearch.Sdk.Runtime;
@@ -622,6 +623,10 @@ public static class UiSelfTest
         foreach (var p in cat.Problems) log.Warn("selftest", $"定义问题：{p}");
 
         log.Info("selftest", $"当前来源（{vm.SourceLabel}）下可见的筛选器=[{string.Join(", ", cat.For(vm.EffectiveProviderScope).Select(f => f.Id))}]");
+        // 模板（v2）：有节时标签栏由模板决定；没节时这一行会显示"0 个 / 平铺"，也就是现状
+        log.Info("selftest", $"模板 {cat.Templates.Count} 个，当前生效=[{vm.ActiveTemplate?.Id ?? "(无：平铺)"}]" +
+                             $"（解析后端={vm.TemplateProviderId ?? "无"}，钉住={vm.IsTemplatePinned}，" +
+                             $"下拉可选=[{string.Join(", ", vm.TemplateOptions.Select(t => t.Id))}]）");
         log.Info("selftest", $"标签栏=[{string.Join(", ", vm.Tabs.Select(t => t.Id + (t.IsCustom ? "(自定义)" : "")))}]");
 
         // 每个筛选器在当前结果集里命中多少 —— 匹配逻辑的直接证据（不依赖"刚好搜到生信文件"）
@@ -869,4 +874,138 @@ public static class UiSelfTest
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
         }
     }
+
+    /// <summary>
+    /// 模板自检（第 13 轮 F1）：<b>切后端换模板、钉住后不跟随、恢复默认回解析链、切模板不重查</b>。
+    /// <para>
+    /// 为什么要造一份临时 filters.json 而不是用现场那份：程序自带的 `filters.json` 目前<b>没有</b>
+    /// templates 节（这是刻意的，"没节 = 现状"），拿它验不出任何模板行为。临时目录里的目录只喂给
+    /// VM 的 <see cref="SearchSessionViewModel.SetFilterCatalog"/>，**不落盘、不动用户配置**，
+    /// 结束后原样还原（目录、钉住表、落盘回调、来源）。
+    /// </para>
+    /// </summary>
+    public static void RunTemplates(SearchSessionViewModel vm, IUniSearchLog log)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"unisearch-templates-{Guid.NewGuid():N}.json");
+
+        // 现场快照：结束时要一模一样地还回去，否则自检本身就把用户的会话改了
+        var savedCatalog = vm.Catalog;
+        var savedPinned = new Dictionary<string, string>(vm.PinnedTemplates, StringComparer.OrdinalIgnoreCase);
+        var savedDeployment = new Dictionary<string, string>(vm.DeploymentTemplates, StringComparer.OrdinalIgnoreCase);
+        var savedPersist = vm.PersistPinnedTemplate;
+        var savedSource = vm.ActiveSourceId;
+
+        try
+        {
+            File.WriteAllText(path, """
+            {
+              "filters": [
+                { "id": "bio", "name": "生信", "order": 500, "extensions": ["pdb"] },
+                { "id": "zot-itemtype", "name": "条目类型", "order": 510, "providers": ["zotero"], "kinds": ["BibliographicItem"] },
+                { "id": "zot-tag", "name": "标签", "order": 520, "providers": ["zotero"], "kinds": ["BibliographicItem"] },
+                { "id": "only-anytxt", "name": "仅正文命中", "order": 530, "providers": ["anytxt"], "extensions": ["txt"] }
+              ],
+              "templates": [
+                { "id": "files",   "name": "文件查找", "order": 100, "filters": ["bio"], "defaultFor": ["everything"] },
+                { "id": "lit",     "name": "文献查找", "order": 110, "filters": ["zot-itemtype", "zot-tag"], "defaultFor": ["zotero"] },
+                { "id": "minimal", "name": "极简",     "order": 900, "filters": [], "defaultFor": ["*"] }
+              ]
+            }
+            """);
+
+            var catalog = FilterCatalog.Load(path);
+            if (catalog.Templates.Count != 3)
+            {
+                log.Warn("selftest", $"模板自检：临时目录只读到 {catalog.Templates.Count} 个模板（期望 3）—— 跳过");
+                return;
+            }
+
+            var ok = true;
+            vm.SetFilterCatalog(catalog);
+            vm.SetFilterTemplates(null, null);          // 干净起点：没有钉住、没有部署级默认
+            vm.PersistPinnedTemplate = (pid, tpl) => _lastPersist = (pid, tpl);
+            _lastPersist = null;
+            vm.SelectedTabId = CategoryIds.All;
+
+            log.Info("selftest", $"=== 模板自检：{catalog.Templates.Count} 个模板 " +
+                                 $"[{string.Join(", ", catalog.Templates.Select(t => t.Id))}] ===");
+
+            // ① 默认集合恰好只有一个后端 → 认它的 defaultFor
+            vm.ActiveSourceId = null;
+            vm.SetAutoSearchProviders(["everything"]);
+            var a1 = vm.ActiveTemplate?.Id;
+            log.Info("selftest", $"① 默认来源=[everything] -> 模板={Show(a1)}（期望 files）" +
+                                 $"标签栏=[{TabsOf(vm)}]");
+            ok &= a1 == "files" && TabsOf(vm) == $"{CategoryIds.All}, bio";
+
+            // ② 切来源 → 自动跟随到该后端的 defaultFor（这就是"按后端分叉"）
+            vm.ActiveSourceId = "zotero";
+            var a2 = vm.ActiveTemplate?.Id;
+            log.Info("selftest", $"② 限定来源=zotero -> 模板={Show(a2)}（期望 lit）标签栏=[{TabsOf(vm)}]");
+            ok &= a2 == "lit" && TabsOf(vm) == $"{CategoryIds.All}, zot-itemtype, zot-tag";
+
+            // ③ 钉住：手动切模板 + 落盘回调收到正确参数
+            var before = vm.SearchRequestCount;
+            vm.SelectTemplateCommand.Execute("minimal");
+            var a3 = vm.ActiveTemplate?.Id;
+            var persistOk = _lastPersist == ("zotero", "minimal");
+            log.Info("selftest", $"③ 手动切到 minimal -> 模板={Show(a3)} 钉住={vm.IsTemplatePinned}" +
+                                 $" 落盘回调={Show(_lastPersist?.Item1)}/{Show(_lastPersist?.Item2)}（期望 zotero/minimal）" +
+                                 $" 标签栏=[{TabsOf(vm)}]");
+            log.Info("selftest", $"   切模板前后查询次数 {before} -> {vm.SearchRequestCount}（期望不变：切模板不该重查）");
+            ok &= a3 == "minimal" && vm.IsTemplatePinned && persistOk && vm.SearchRequestCount == before;
+
+            // ④ 钉住后切走再切回来 → 不跟随默认
+            vm.ActiveSourceId = "everything";
+            var b1 = vm.ActiveTemplate?.Id;
+            vm.ActiveSourceId = "zotero";
+            var b2 = vm.ActiveTemplate?.Id;
+            log.Info("selftest", $"④ 钉住后切到 everything -> 模板={Show(b1)}（期望 files，没钉到它头上）；" +
+                                 $"再切回 zotero -> 模板={Show(b2)}（期望 minimal，而不是默认的 lit）");
+            ok &= b1 == "files" && b2 == "minimal";
+
+            // ⑤ 恢复默认 → 回解析链
+            vm.ResetTemplateCommand.Execute(null);
+            var c1 = vm.ActiveTemplate?.Id;
+            var unpinOk = _lastPersist == ("zotero", null);
+            log.Info("selftest", $"⑤ 恢复默认 -> 模板={Show(c1)}（期望 lit）钉住={vm.IsTemplatePinned}（期望 False）" +
+                                 $" 落盘回调={Show(_lastPersist?.Item1)}/{(_lastPersist?.Item2 is null ? "null" : Show(_lastPersist?.Item2))}（期望 zotero/null）");
+            ok &= c1 == "lit" && !vm.IsTemplatePinned && unpinOk;
+
+            // ⑥ 没有"某一个后端"时（默认集合多个）→ 走 "*" 兜底，而不是某个后端的模板
+            vm.ActiveSourceId = null;
+            vm.SetAutoSearchProviders(["everything", "anytxt"]);
+            var d1 = vm.ActiveTemplate?.Id;
+            log.Info("selftest", $"⑥ 默认来源=[everything, anytxt]（不是单一后端）-> 模板={Show(d1)}（期望 minimal：走 \"*\" 兜底）");
+            ok &= d1 == "minimal";
+
+            // ⑦ 当前选中的自定义筛选器被新模板藏掉 → 必须退回「全部」，不能"没标签高亮却还在过滤"
+            vm.SetAutoSearchProviders(["zotero"]);
+            vm.SelectedTabId = "zot-tag";
+            vm.SelectTemplateCommand.Execute("files");     // files 里没有 zot-tag
+            var e1 = vm.SelectedTabId;
+            log.Info("selftest", $"⑦ 选中 zot-tag 后切到只含 bio 的模板 -> SelectedTabId={e1}（期望 all：否则查询串还在按 zot-tag 过滤）");
+            ok &= e1 == CategoryIds.All;
+
+            log.Info("selftest", ok ? "模板自检：全部通过 ✓" : "模板自检：有失败 ✗");
+        }
+        catch (Exception ex)
+        {
+            log.Error("selftest", "模板自检异常", ex);
+        }
+        finally
+        {
+            vm.PersistPinnedTemplate = savedPersist;
+            vm.SetFilterCatalog(savedCatalog);
+            vm.SetFilterTemplates(savedPinned, savedDeployment);
+            vm.ActiveSourceId = savedSource;
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    static (string, string?)? _lastPersist;
+
+    static string Show(string? s) => s is { Length: > 0 } ? s : "(无)";
+
+    static string TabsOf(SearchSessionViewModel vm) => string.Join(", ", vm.Tabs.Select(t => t.Id));
 }

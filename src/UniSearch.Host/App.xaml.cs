@@ -108,7 +108,20 @@ public partial class App : Application
             Path.Combine(AppContext.BaseDirectory, "filters.json"),
             Path.Combine(dataDir, "filters.json"));
         vm.SetFilterCatalog(_filterCatalog);
-        log.Info("filters", $"筛选器 {_filterCatalog.All.Count} 个（" +
+        // 模板的钉住表与部署级默认要在目录之后注入：解析链得先有目录才谈得上"哪个模板"。
+        // 钉住来自 settings.filterTemplates.<pid>；部署级默认来自 providers.<id>.options.filterTemplate
+        // —— 后者是遗留清单 C4 里那个"没人读的口子"，从这一轮起真被读起来了。
+        vm.SetFilterTemplates(settings.FilterTemplates, DeploymentTemplates(settings));
+        vm.PersistPinnedTemplate = (providerId, templateId) =>
+        {
+            if (_settingsStore is null) return;
+            var s = _settingsStore.Current;
+            if (string.IsNullOrEmpty(templateId)) s.FilterTemplates.Remove(providerId);
+            else s.FilterTemplates[providerId] = templateId;
+            // notify: false —— 钉模板只影响标签栏，不该触发一遍"设置变了"的全量重放
+            _settingsStore.Save(s, notify: false);
+        };
+        log.Info("filters", $"筛选器 {_filterCatalog.All.Count} 个、模板 {_filterCatalog.Templates.Count} 个（" +
                             $"来源=[{string.Join(", ", _filterCatalog.Sources.Select(Path.GetFileName))}]）");
         foreach (var problem in _filterCatalog.Problems)
             log.Warn("filters", problem);
@@ -297,6 +310,22 @@ public partial class App : Application
                 timer.Stop();
                 try { await UiSelfTest.RunFiltersAsync(vm, log); }
                 catch (Exception ex) { log.Error("selftest", "筛选器自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
+        // --selftest-templates：筛选器模板（第 13 轮 F1）—— 切后端换模板 / 钉住后不跟随 /
+        // 恢复默认回解析链 / 切模板不重查，全部程序化断言。造临时 filters.json，不碰用户配置。
+        if (e.Args.Contains("--selftest-templates", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                try { UiSelfTest.RunTemplates(vm, log); }
+                catch (Exception ex) { log.Error("selftest", "模板自检失败", ex); }
                 Quit();
             };
             timer.Start();
@@ -588,6 +617,7 @@ public partial class App : Application
             _vm.IsPreviewOpen = s.Preview.OpenByDefault;
             _vm.MaxRows = s.Search.MaxRows;
             _vm.SetAutoSearchProviders(s.Search.AutoSearchProviders);
+            _vm.SetFilterTemplates(s.FilterTemplates, DeploymentTemplates(s));
             _vm.ApplyLayout(s.Columns);   // 设置里改了列 → 窗口立刻重建列
             // 上限/排除项/来源都作用于查询，得重跑一次才看得见效果
             _ = _vm.RunAsync();
@@ -692,6 +722,20 @@ public partial class App : Application
         for (var i = 0; i < args.Length - 1; i++)
             if (args[i].Equals("--query", StringComparison.OrdinalIgnoreCase)) return args[i + 1];
         return Environment.GetEnvironmentVariable("UNISEARCH_QUERY") ?? string.Empty;
+    }
+
+    /// <summary>
+    /// 部署级默认模板：<c>providers.&lt;id&gt;.options.filterTemplate</c>。
+    /// 它在解析链里排在"用户钉住"之后、"定义文件的 defaultFor"之前 ——
+    /// 也就是"这台机器上所有用户默认用哪套标签"这种口径。
+    /// </summary>
+    static Dictionary<string, string> DeploymentTemplates(UniSearchSettings s)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, ps) in s.Providers)
+            if (ps.Options.TryGetValue("filterTemplate", out var v) && !string.IsNullOrWhiteSpace(v))
+                map[id] = v.Trim();
+        return map;
     }
 
     protected override void OnExit(ExitEventArgs e)
