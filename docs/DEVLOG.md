@@ -1327,12 +1327,13 @@ D1 排查可以从这里入手（超时判定发生在哪一层、为什么不�
 
 ---
 
-## 2026-09-28 第 13 轮（筛选器模板 F0：schema + 合并 + 解析链，纯 Core）
+## 2026-09-28 第 13 轮（筛选器模板 F0 + F1：Core 层 + 模板锚点）
 
 ### 本轮目标
 
-接 [US-13]（任务 `TASK-2026-09-27-07`）的 **F0**：`filters.json` v2 的 `templates` 节 ——
-schema + 两文件独立合并 + 激活解析链 + 兼容回退。**只动 Core**，不碰 UI、不碰匹配语义。
+接 [US-13]（任务 `TASK-2026-09-27-07`）：**F0** = `filters.json` v2 的 `templates` 节（schema +
+两文件独立合并 + 激活解析链 + 兼容回退，纯 Core）；**F1** = UI（模板锚点、切换、钉住/恢复默认、
+按来源自动跟随、settings 持久化）。
 依据 `docs/spec/FILTER-TEMPLATES.md`（本轮随文档一起入库 git）。
 
 ### 状态总览
@@ -1343,57 +1344,81 @@ schema + 两文件独立合并 + 激活解析链 + 兼容回退。**只动 Core*
 | `FilterTemplate` 记录 + v2 schema | ✅ | `src/UniSearch.Core/Filters/FilterTemplate.cs` |
 | 两文件**独立**合并（filters 与 templates 各自合并） | ✅ | 单测 ×1 |
 | 引用校验 / `defaultFor` 冲突 | ✅ | 单测 ×2 |
-| 激活解析链（钉住 → 部署级 → `defaultFor` → `"*"` → 平铺） | ✅ | 单测 ×1 |
+| 激活解析链（钉住 → 部署级 → `defaultFor` → `"*"` → 平铺） | ✅ | 单测 ×1 + 自检 ①②⑥ |
 | 双重显隐 + 模板内引用顺序 | ✅ | 单测 ×1 |
-| **没写 `templates` 节 = 现状** | ✅ | 单测 ×1（逐项比对 `For` 与 `ForTemplate(null, …)`） |
+| **没写 `templates` 节 = 现状** | ✅ | 单测 ×1 + **主窗渲染与改造前逐像素相同**（SHA256 一致） |
+| 模板锚点（标签栏最左）+ 下拉 | ✅ | `out/tpl-anchor.png`（有节）/ `out/tpl-none.png`（无节，锚点消失） |
+| 钉住 / 恢复默认 / 落盘 | ✅ | 自检 ③④⑤（含落盘回调参数断言） |
+| 按来源自动跟随 | ✅ | 自检 ②④ |
+| 切模板不重查 | ✅ | 自检 ③（查询次数前后不变） |
 | 单测 | **112/112**（原 106 + 6） | `dotnet test -c Debug` |
-| F1（UI 锚点 / 钉住 / 设置窗） | ⬜ 下一轮 | — |
-| F2（热重载） | ⬜ | — |
+| F2（热重载） | ⬜ 下一轮 | — |
 | F3（下推映射 + Zotero 模板） | ⬜ 与 Zotero Provider 同期 | — |
 
 ### 已完成并验证
+
+**F0（Core）**
 
 - **`FilterTemplate`**（新文件）：`id` / `name` / `order` / `filters` / `defaultFor` / `providers`，
   只引用不复制；`AvailableFor(providerId)` 管"下拉里出不出来"，`DefaultFor` 管"认领谁是默认"。
 - **`FilterFile.Templates` 声明成 `List<FilterTemplate>?`**：`null` = 这个文件根本没写这个节 ——
   与"写了空数组"必须区分开，否则"没写 = 回退现状"这条保证根本没法表达。
 - **合并**：`filters` 与 `templates` **各自独立合并**（同 id 后者整条覆盖，不做字段级合并）。
-  用户文件只写 `filters` 时，程序模板的 `templates` 照样生效。
-- **校验放在全部文件合并完之后**：程序模板引用的定义可能只在用户那份文件里（或反过来），
-  边读边校验会把合法引用误判成"不存在"。引用不存在 → 剔除该引用 + 记问题（**不**整条丢模板）；
-  两个模板抢同一个后端 → order 小者胜 + 记问题。
+- **校验放在全部文件合并完之后**：模板引用的定义可能只在另一份文件里，边读边校验会误判成"不存在"。
 - **解析链** `ResolveTemplate(providerId, pinned, deployment)`：钉住 → 部署级 → `defaultFor` 认领
-  → `defaultFor: ["*"]` → **null（回退平铺）**。认不出的 id 不生效、直接往下一步走 ——
-  设置里钉的模板被删掉时，不该把标签栏变空。
-- **`ForTemplate(template, providerIds)`**：模板引用 ∩ 显隐规则，顺序以模板里的**引用先后**为准
-  （模板存在的意义就是"有序引用"）。`template` 为 null 时直接转 `For`，平铺那条路径一行没改。
-- **程序自带的 `filters.json` 本轮刻意不加 `templates` 节** —— UI 还没做，加了就等于替用户做了决定；
-  保持"没节 = 现状"才能让 F0 零行为变化地进主干。
+  → `defaultFor: ["*"]` → **null（回退平铺）**。认不出的 id 不生效、直接往下一步走。
+- **`ForTemplate(template, providerIds)`**：模板引用 ∩ 显隐规则，顺序以模板里的**引用先后**为准。
+
+**F1（UI / 设置 / 自检）**
+
+- **模板锚点**：标签栏最左一枚（漏斗图标 + 当前模板名），`ContextMenu` 下拉（`PlacementTarget`
+  取回 VM，与结果行右键同一套办法）；**没有 `templates` 节时整块不显示**。
+- **`settings.filterTemplates.<pid>`**：手动切模板即钉住并落盘（`notify: false`，不触发全量重放）；
+  「跟随后端默认」删掉该键、回解析链。`Normalize` 里键值规范成小写、空值直接删（"钉了空串" = 没钉）。
+- **部署级默认 `providers.<id>.options.filterTemplate` 真被读起来了** —— 遗留清单 C4 点名的那个
+  "没人读的口子"，现在排在"用户钉住"之后、"`defaultFor`"之前。
+- **多后端口径（本轮拍板）**：`TemplateProviderId` 只在**限定到某一个后端**时才给出 id；
+  默认集合填了多个 / 清空 → `null` → 走 `"*"` 兜底。**不为多后端设计模板语义**（用户明确要求）。
+- **切模板不重查**：`Apply()` 里的标签栏构建拆成 `BuildTabs()`（内置分类来自缓存的 `_groups`，
+  自定义筛选器来自模板），模板切换只重跑这一段；为此新增 `SearchRequestCount` 供自检断言。
+- **藏掉当前筛选器时的兜底**：新模板里没有当前选中的自定义筛选器 → 退回「全部」。不处理的话
+  标签栏一个高亮的都没有、查询串却还在按它过滤（"结果莫名其妙少了一大截"那种最难查的坏法）。
 
 ### 未完成 / 下次从这里继续
 
-- **F1**：模板锚点控件（标签栏最左）+ 切换 + 钉住/恢复默认 + `EffectiveProviderScope` 自动跟随
-  + `settings.filterTemplates.<pid>` 持久化；`--selftest-filters` 扩展程序化断言。
 - **F2**：`FileSystemWatcher` 热重载（吸收遗留 C3）。
 - **F3**：下推映射 + Zotero 模板示例（与 [US-15] Zotero Provider 同期）。
-- **待拍板**：多后端来源（`EffectiveProviderScope` 有多个 id）时锚点该显示哪个模板 ——
-  设计文档没定。Core 现在只按"一个 providerId"解析，全局视图走 `"*"`，F1 开工前要给个口径。
+- 设置窗里的**模板编辑器**（勾选定义入模板、拖动排序、指定 `defaultFor`，写回用户那份 `filters.json`）——
+  设计文档 §5 提到，但不在 F1 验收里，仍未做。
+- 程序自带的 `filters.json` 还没加 `templates` 节：等 F3 有真实模板内容（文件查找 / 文献查找）再一起加。
 
 ### 新踩的坑
 
 1. **`"*"` 不能过筛选器那套 id 规范化**：`NormalizeId` 把非字母数字一律换成 `-`，
-   `defaultFor: ["*"]` 会变成 `"-"`，全局兜底静默失效。后端 token 得单独走
+   `defaultFor: ["*"]` 会静默变成 `"-"`，全局兜底失效。后端 token 得单独走
    `NormalizeProviderToken`（保留 `*`）。而模板**引用**上正好相反 —— 模板里写 `"Bio Info"`
    必须规范化成 `bio-info` 才引用得到，否则是"看着写对了却引用不到"。
 2. **`if (file?.Filters is null) continue;` 会顺手吃掉 templates**：那个早退是按"filters 是必填节"
    写的，加了可选节之后它就成了 bug 源 —— 文件里只写 `templates` 时整份被跳过。
-   改成 `foreach (var raw in file.Filters ?? [])` 才对。
+3. **自检里断言"标签栏 = 全部, bio"是错的**：`CategoryTab.Id` 用的是 `CategoryIds.All`（`all`），
+   "全部"只是显示名。第一遍 7 项里就这一条挂 —— 断言要对着 id 写，不是对着界面上看到的字写。
+4. **`--dump-render` 的值就是输出路径**（`--dump-render <png>`）：写成 `--dump-render --query txt`
+   会把 `--query` 当成文件名，日志里是"离屏渲染完成 -> --query"，图根本没出。
+5. （工具坑）pwsh 里 `git commit -m "...\"*\"..."` 的反斜杠转义不成立，消息被拆成 pathspec ——
+   代码与文档挤进同一个提交、消息还只写了文档。**多行 / 带引号的提交消息一律用 `-F <文件>`。**
 
 ### 验证手段变化
 
-- `dotnet test`：106 → **112**。新增 6 条覆盖：无节回退（逐项比对）、合并与覆盖、引用校验、
-  `defaultFor` 冲突、解析链优先级、双重显隐与引用顺序。
-- **未新增 `--selftest-*`**：F0 是纯 Core 层，UI 还没有模板概念，Host 侧自检等 F1 一起加。
+- `dotnet test`：106 → **112**（新增 6 条：无节回退逐项比对 / 合并覆盖 / 引用校验 /
+  `defaultFor` 冲突 / 解析链优先级 / 双重显隐与引用顺序）。
+- 新增 **`--selftest-templates`**：造临时 `filters.json`（3 个模板），驱动 VM 断言 7 项 ——
+  默认集合单后端认领、切来源自动跟随、钉住 + 落盘回调参数、钉住后不跟随、恢复默认回解析链、
+  多后端走 `"*"` 兜底、藏掉当前筛选器时退回「全部」；外加"切模板不重查"（查询次数不变）。
+  **不落盘、不动用户配置**，结束时目录/钉住表/回调/来源原样还原。
+- `--selftest-filters` 增补一行模板状态（`模板 N 个，当前生效=[…]（解析后端=… 钉住=… 下拉可选=[…]）`）。
+- 渲染证据：`out/tpl-anchor.png`（有 templates 节 → 锚点「文件查找」在标签栏最左，
+  且模板没引用的「笔记本/配置」不出现）、`out/tpl-none.png`（删掉后锚点消失，
+  **SHA256 与第 12 轮的 `r12-main2.png` 完全相同** = 逐像素没变）。
 
 ---
 
