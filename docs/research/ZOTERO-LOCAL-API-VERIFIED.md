@@ -19,10 +19,13 @@
 | 健康检查 | `GET /connector/ping` → HTML `Zotero is running` | ✅ 实测 |
 | Provider 端口配置 | 用户若改过端口，Provider 须支持 `providers.zotero.options.port` 覆盖（C4 设置口子），探针随之 | 设计决定 |
 
-## 1. 本地 API（`/api/users/0/...`）—— GET-only 只读
+## 1. 本地 API（`/api/users/0/...`）—— 读无需鉴权（Zotero 10+ 写要本地 key）
 
 请求路径 user id 固定写 **0**（响应 links 里出现的真实 web id 仅展示用）。
-`server_localAPI.js` 各端点 `supportedMethods=['GET']`（源码确认）。
+
+> ⚠ 本文早期版本写的是"GET-only 只读、源码 `supportedMethods=['GET']`" —— 那是 **Zotero 7** 的事实。
+> **Zotero 10+ 的本地 API 支持写**（`POST`/`PUT`/`PATCH`/`DELETE`，需 `POST /api/local/authorize`
+> 拿本地 key）。见 §4.8。
 
 ### 1.1 ✅ 实测可用（HTTP 200 + 真实数据）
 
@@ -139,7 +142,105 @@ creators[] · tags[] · collections[] · relations · dateAdded · dateModified
 
 ---
 
-## 4. ZoteroProvider 映射设计（依据以上事实）
+## 4. 官方文档读后：新增事实与对前文的修正（2026-09-28 夜）
+
+> 来源：官方 Web API v3 文档（basics / local_api / types_and_fields / fulltext_content，
+> 用户提供入口，逐页读过）。**本节是文档事实，与前面的"本机实测"互相印证；
+> 冲突处以文档为准并标注。** 本机 Zotero 正在升级到 **10.0.3**，下面的 ⏳ 项待服务起来后复测。
+
+### 4.1 目标版本确认：**Zotero 10**（不是 7）
+
+文档多处写 `Zotero 10+`。与本项目相关的三条：
+
+| 特性 | 说明 |
+|---|---|
+| **`Zotero-Server-ID` 响应头** | 每个本地 API 响应都有，标识这个 Zotero 实例（存在数据库里，**跟着数据走**，重启/升级不变）。读请求可不带；带了就必须匹配，否则 **412 Precondition Failed**；**写请求必带**，不带 **428 Precondition Required**。缓存数据必须按 server ID 分区 |
+| **本地对象版本** | Zotero 10+ 的 `version` / `Last-Modified-Version` / `?since=` **都是本地版本**，与 Web API 版本**毫无关系**。老版本报的是同步版本 |
+| **写入要本地 API key** | `POST /api/local/authorize` 弹窗向用户申请（`Allow` / `Always Allow` / `Deny`）；**不是 zotero.org 的 key**；不 `remember` 的话**一次性**，用完即失效；弹窗每分钟最多 5 次，超了 429 |
+
+### 4.2 ⚠ 修正一：**本地 API 不默认分页**
+
+文档原文：`The local API does not impose a default or maximum limit. If limit is omitted,
+all matching objects are returned in one response.`
+
+- Web API：`limit` 默认 25、上限 100；
+- **本地 API：省略 `limit` = 一次返回全部**（本机 106 条）。`limit`/`start` 与 `Link` 头仍可用。
+
+⏳ 待复测：`/items` 不带 `limit` 是否真返回 106 条（升级前最后一次调用正好赶上服务停）。
+
+### 4.3 ⚠ 修正二：`q` 的文档口径与我实测不一致（**已解释**）
+
+文档：`q` = Quick search，**"Searches titles and individual creator fields by default"**。
+但我实测 `Nature Electronics`（只存在于 `publicationTitle`）与 `Nat Electron`（`journalAbbreviation`）
+**都命中了**。文档自己也给了答案：
+
+> `The local API accepts the same search parameters but uses Zotero's local quicksearch
+> implementation, so the set of items returned by a given q value may not match the Web API exactly.`
+
+**即：本地 `q=` 走的是 Zotero 桌面端的本地 quicksearch，比 Web API 文档描述搜得宽。**
+→ **以本机实测为准**（§3.1 那张表），但要知道这是"实现细节"而非契约，Zotero 升级后需复测。
+
+### 4.4 ✅ 新增：`itemType` / `tag` 支持**布尔语法**（我上轮漏了）
+
+文档 Search Syntax 节原文示例：
+
+| 写法 | 语义 |
+|---|---|
+| `itemType=book \|\| journalArticle` | **OR** |
+| `itemType=-attachment` | **NOT** |
+| `tag=foo bar` | 带空格的标签 |
+| `tag=foo&tag=bar` | **AND**（多个同名参数） |
+| `tag=foo bar \|\| bar` | **OR** |
+| `tag=-foo` | **NOT** |
+| `tag=\-foo` | 字面连字符开头的标签 |
+
+⏳ 待复测：以上五种在**本机真实库**上逐条验（升级前只验了单值 `tag=` 与 `itemType=-attachment`）。
+
+### 4.5 ✅ 新增：本地 API **独有的三个端点**
+
+| 端点 | 作用 | 为什么重要 |
+|---|---|---|
+| **`/searches/<searchKey>/items`** | **真正执行保存的搜索** | Web API 只暴露搜索的元数据、不执行。本机 `/searches` 现在是 `[]`（用户没建保存的搜索），**但这是"用户在 Zotero 里配好筛选条件，UniSearch 直接复用"的天然接口** |
+| `/items/<itemKey>/file` | **302 重定向到 `file://`** | 比解析 `links.enclosure` 更正规，直接拿到附件在磁盘上的路径 |
+| `/file/view/url` | 同上但返回纯文本 URL | 不跟随重定向也能拿到路径 |
+
+### 4.6 ✅ 新增：`sort` 的**完整**合法值（我上轮只试了 7 个）
+
+`dateAdded` · `dateModified` · `title` · `creator` · `itemType` · `date` · `publisher` ·
+`publicationTitle` · `journalAbbreviation` · `language` · `accessDate` · `libraryCatalog` ·
+`callNumber` · `rights` · `addedBy` · `numItems`(tags)
+
+**默认 `dateModified`**（不是 dateAdded）。`direction` = `asc`/`desc`。
+
+### 4.7 ✅ 新增：其它可用参数与端点
+
+- **`itemKey=`**：逗号分隔的条目 key 列表，**单次最多 50 个**。
+- **`includeTrashed=0/1`**：是否含回收站（`/items/trash` 默认含）。
+- **`since=`**：库**版本号**（文档再次确认不是日期）。
+- **`format=`**：`json` / `keys`（换行分隔的 key 列表，**无上限**）/ `versions`（无上限）/ `bib`（仅条目，**上限 150**）/ 导出格式；`atom` 在本地 API **501**。
+- **缓存**：多对象读返回 `Last-Modified-Version`；带 `If-Modified-Since-Version` 且无变化 → **304**。本地 API 同样支持（但本地本来就快，不急）。
+- **Tags 端点族**（比我想的多）：`/tags` · `/items/tags` · `/items/top/tags` · `/items/trash/tags` ·
+  `/collections/<key>/tags` · `/collections/<key>/items/tags` · `/collections/<key>/items/top/tags` ·
+  `/publications/items/tags`。tags 的 `qmode` = `contains`（默认）/ `startsWith`。
+- **tags-within-items 专用参数**：`itemQ` / `itemQMode` / `itemTag` —— 即在"按条目条件取标签"时，
+  主参数作用于**标签**，`item*` 参数作用于**条目**。
+- **Schema 端点**（写 UI 才需要，但能给出权威清单）：`/itemTypes` · `/itemFields` ·
+  `/itemTypeFields?itemType=…` · `/itemTypeCreatorTypes?itemType=…` · `/creatorFields` ·
+  `/items/new?itemType=…`。**本地 API 返回用户 locale 的本地化名字**（`locale` 参数被忽略；
+  `/creatorFields` 例外，永远英文）。全量 schema 可一次下载：`https://api.zotero.org/schema`。
+
+### 4.8 💡 值得单独记一笔：本地 API **能写**
+
+Zotero 10+ 的本地 API 支持 `POST`/`PUT`/`PATCH`/`DELETE`（条目、集合、保存的搜索），
+另有**标签删除**、全文写入、文件上传。改动立即在 Zotero UI 可见，下次同步上传到 zotero.org。
+
+**对 UniSearch 的含义**：将来不只是"搜 Zotero"，还能**改**（比如给条目批量打标签、
+把搜索结果存成一个集合）。这超出当前任务范围，但说明这条路是通的 —— 前提是用户授权
+（`POST /api/local/authorize` 弹窗）。
+
+---
+
+## 5. ZoteroProvider 映射设计（依据以上事实）
 
 **Descriptor**：`Id="zotero"`；`Capabilities = ReturnsDocuments | SearchesFileContent（附件全文，经 qmode=everything）| SupportsKindFilter（itemType）`；**不声明** SupportsDirectoryScope（无目录概念）；`Priority=30`（慢后端，先占位再补齐）；`LatencyHint=800ms`；`DependsOn = HttpEndpoint http://127.0.0.1:23119/connector/ping`，`Required=true`，Down 时 `Hint="启动 Zotero，并在设置→高级开启『允许其他应用程序…/本地 API』"`。
 
@@ -159,7 +260,7 @@ creators[] · tags[] · collections[] · relations · dateAdded · dateModified
 
 **结果映射**：顶层条目 `Path` 留空、`Uri = zotero://select/...`（⚠ 精确格式待复核）、`ReadOnly=true`、无 Snippet（API 不返回命中高亮——与 AnyTXT 的关键差异）；附件行映射 `links.enclosure` 的本地路径 → **真 Path**（shell 右键/预览原生可用）；融合键走 `Uri` 分支（与 REMOTE_SEARCH_PLAN §4.3 的 erf 做法同款，天然与本地 Path 结果不冲突）。动作：`IExternalUiProvider "在 Zotero 中打开"`（select URI）；BibTeX 复制为可选增强（csljson 自转）。
 
-## 5. ⚠ 待复核清单（2026-09-28 更新）
+## 6. ⚠ 待复核清单（2026-09-28 更新）
 
 | # | 项 | 状态 |
 |---|---|---|
@@ -174,7 +275,7 @@ creators[] · tags[] · collections[] · relations · dateAdded · dateModified
 —— 是"everything 包含标签与注释"还是"PDF 正文里真有这些中文词"，未区分。
 **这不影响 Provider 设计**（标签一律走 `tag=`），但值得记一笔。
 
-## 6. 环境事实
+## 7. 环境事实
 
 已装扩展仅 `zoteropdftranslate@euclpts.com.xpi`（PDF 翻译），无 Better BibTeX。
 本地 API 无鉴权：本机任何进程在 Zotero 运行期间可读文库（个人机可接受，须知悉）。
