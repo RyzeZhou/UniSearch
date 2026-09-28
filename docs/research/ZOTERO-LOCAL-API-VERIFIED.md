@@ -240,6 +240,88 @@ Zotero 10+ 的本地 API 支持 `POST`/`PUT`/`PATCH`/`DELETE`（条目、集合�
 
 ---
 
+## 4.9 ✅ Zotero 10.0.3 复测结果（2026-09-28 夜，服务起来后逐条验）
+
+本机已升级到 **Zotero 10.0.3**。§4 里标的 ⏳ 项**全部复测通过**，另有一个新发现。
+
+### 4.9.1 响应头实测（`GET /api/`）
+
+```
+HTTP/1.0 200 OK
+X-Zotero-Version: 10.0.3
+X-Zotero-Connector-API-Version: 3
+Zotero-API-Version: 3
+Zotero-Schema-Version: 44
+Zotero-Server-ID: C5ZPRimItfZv
+```
+
+- 版本确凿是 **10.0.3**；schema 版本 44。
+- ⚠ **服务说的是 `HTTP/1.0`** —— 不是 1.1。用 HttpClient/WebRequest 时别假设 keep-alive。
+- `Total-Results` · `Link`（含 `rel="last"` / `rel="next"` / `rel="alternate"`）· `Last-Modified-Version` 都在。
+
+### 4.9.2 ✅ 布尔语法全部验证通过（§4.4 的五种写法）
+
+| 写法 | 实测 | 验算 |
+|---|---|---|
+| `itemType=journalArticle` | 34 | — |
+| `itemType=preprint` | 6 | — |
+| `itemType=journalArticle \|\| preprint` | **40** | 34+6 ✅ OR |
+| `itemType=-attachment` | 41 | 44 顶层 - 3 ✅ |
+| `itemType=-journalArticle` | **72** | 106−34 ✅ NOT |
+| `tag=DNA合成` / `tag=亲和力` | 3 / 6 | — |
+| `tag=DNA合成&tag=亲和力` | **0** | 没有条目同时有这两个 ✅ AND |
+| `tag=DNA合成 \|\| 亲和力` | **9** | 3+6 ✅ OR |
+| `tag=-DNA合成` | **103** | 106−3 ✅ NOT |
+
+### 4.9.3 ✅ 省略 `limit` 确实返回全部
+
+`/items` → **106 条**、`/items/top` → **44 条**，都是一次响应给全。文档准确。
+
+### 4.9.4 ✅ schema 端点返回**中文名**（可直接当 UI 标签用）
+
+- `/itemTypes` → **40 种**，`localized` 是中文：`注释` `艺术品` `附件` `音频` `法案` `博客帖文`
+  `图书` `图书章节` `司法案例` `软件` `会议论文` `数据集` …
+- `/itemFields` → **246 个**字段，中文名：`标题` `摘要` `日期` `DOI` `引用关键词` `网址` …
+- `/itemTypeFields?itemType=journalArticle` → **31 个**字段：
+  `title` `abstractNote` `publicationTitle` `publisher` `place` `date` `volume` `issue` `section`
+  `partNumber` `partTitle` `pages` `series` `seriesTitle` `seriesText` `journalAbbreviation` `DOI`
+  `citationKey` `url` `accessDate` `PMID` `PMCID` `ISSN` `archive` `archiveLocation` `shortTitle`
+  `language` `libraryCatalog` `callNumber` `rights` `extra`
+
+### 4.9.5 ✅ `q=` 字段边界：**与升级前完全一致**
+
+Zotero 10 下重跑 §3.1 的探针，结论一字不差：标题/作者/期刊名/期刊缩写/年份/key ✅；
+DOI/摘要/标签/集合名 ❌。所以 §4.3 那条"本地 quicksearch 比文档搜得宽"依然成立，
+且**不是 Zotero 10 引入的**。
+
+### 4.9.6 ✅ 本地独有端点
+
+- `/file/view/url` → 纯文本 `file:///C:/Users/zhou/Zotero/storage/FGRH7LG3/Jung%20…pdf`（**URL 编码，要解码**）。
+- `/items/<key>/file` → **302** + `Location: file:///…`（同上）。
+- 附件 JSON 里 `links.enclosure` **依然在**，含 `href` / `type` / `title` / `length` 四项。
+- `/searches` → `[]`（用户还没建保存的搜索，所以 `/searches/<key>/items` **暂时无法实测**）。
+- `format=keys` → 44 行；`format=versions` → JSON 对象（`{"N35RT33I": 0, …}`）。
+
+### 4.9.7 ⚠⚠ 新发现：本地对象版本**全是 0**
+
+```
+44 条顶层条目  version 全部 = 0        （对照：Zotero 7 时代是 113）
+Last-Modified-Version: 0
+?since=0     -> Total-Results = 106    （since=0 等于"不过滤"，符合文档默认值语义）
+dateModified 却有 42 个不同值           → 条目确实在不同时间改过
+```
+
+**含义（对 Provider 设计是硬约束）**：
+
+- **`?since=` / `If-Modified-Since-Version` 在这台机器上没法用来做增量** —— 所有对象版本都是 0，
+  问"比 0 新的"要么返回全量、要么语义失效。
+- 好在**本地 API 本来就快**（106 条一次给全），**Provider 直接每次全量拉取**即可，
+  不必费劲做增量缓存。这条要写进 Provider 的实现约定。
+- 猜测成因：Zotero 10 的本地版本"每次保存/删除按事务递增"，而这套库是**同步下载来的**
+  （不是本地逐条改出来的），所以计数器停在 0。**未证实**，但现象确凿。
+
+---
+
 ## 5. ZoteroProvider 映射设计（依据以上事实）
 
 **Descriptor**：`Id="zotero"`；`Capabilities = ReturnsDocuments | SearchesFileContent（附件全文，经 qmode=everything）| SupportsKindFilter（itemType）`；**不声明** SupportsDirectoryScope（无目录概念）；`Priority=30`（慢后端，先占位再补齐）；`LatencyHint=800ms`；`DependsOn = HttpEndpoint http://127.0.0.1:23119/connector/ping`，`Required=true`，Down 时 `Hint="启动 Zotero，并在设置→高级开启『允许其他应用程序…/本地 API』"`。
