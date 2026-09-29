@@ -82,6 +82,25 @@
       "description": "Zotero 的附件条目（有真实本地路径，可直接打开/预览）",
       "providers": ["zotero"],
       "subtypes": ["attachment"]
+    },
+
+    {
+      "id": "sy-heading",
+      "name": "标题块",
+      "order": 440,
+      "glyph": "E8A5",
+      "description": "思源里的标题块（按 h1~h4 下推成 subtype IN (...)）。内置分类只能分到「笔记」，表达不了这个粒度",
+      "providers": ["siyuan"],
+      "subtypes": ["h1", "h2", "h3", "h4"]
+    },
+    {
+      "id": "sy-list",
+      "name": "列表项",
+      "order": 450,
+      "glyph": "E8FD",
+      "description": "思源里的列表与列表项（u=无序 / o=有序）",
+      "providers": ["siyuan"],
+      "subtypes": ["u", "o"]
     }
   ]
 }

@@ -561,6 +561,48 @@ public class CoreLogicTests
         Assert.Equal(2, ProviderSelector.Select(entries, SearchContext.Global(), QueryParser.Parse(1, "x")).Selected.Count);
     }
 
+    // ───────────────── 融合分类：正文命中只对文件有意义 ─────────────────
+    // 知识对象（思源的笔记块）没有"文件名 vs 正文"这组对立 —— 内容就是它本身。
+    // 硬套 ContentMatches 会让它们全部丢掉自己的分类（实测：思源 60 个块全落进
+    // 「正文命中」，而那个分类在思源下被隐藏，于是标签栏只剩一个计数为 0 的「全部」）。
+
+    static SearchResult Row(string id, ResultKind kind, MatchKind match, string? path) => new()
+    {
+        ProviderId = "test",
+        ProviderItemId = id,
+        Kind = kind,
+        Match = match,
+        Title = id,
+        Path = path,
+    };
+
+    [Fact]
+    public void A_content_hit_without_a_path_keeps_the_category_of_its_kind()
+    {
+        var store = new FusionStore();
+
+        Assert.Equal(CategoryIds.Notes, store.Add(Row("b1", ResultKind.Note, MatchKind.Content, null)).CategoryId);
+        Assert.Equal(CategoryIds.Code,
+            store.Add(Row("b2", ResultKind.CodeSymbol, MatchKind.Content, null)).CategoryId);
+    }
+
+    [Fact]
+    public void A_content_hit_on_a_real_file_still_lands_in_the_content_category()
+    {
+        // 这一档是给 AnyTXT 那种"文件名没中、正文中了"的文件用的，行为必须原样保留
+        var store = new FusionStore();
+        var fused = store.Add(Row(@"D:\docs\a.txt", ResultKind.File, MatchKind.Content, @"D:\docs\a.txt"));
+        Assert.Equal(CategoryIds.ContentMatches, fused.CategoryId);
+    }
+
+    [Fact]
+    public void A_name_hit_always_uses_the_category_of_the_entity()
+    {
+        var store = new FusionStore();
+        var fused = store.Add(Row(@"D:\docs\a.txt", ResultKind.File, MatchKind.NameWord, @"D:\docs\a.txt"));
+        Assert.Equal(CategoryIds.Documents, fused.CategoryId);
+    }
+
     // ───────────────── 列排序（详细列表）─────────────────
     static FusedResult Fused(string title, long? size = null, string? path = null,
                              DateTimeOffset? modified = null, bool folder = false, double score = 0)

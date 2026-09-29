@@ -90,6 +90,13 @@ public sealed class CategoryEngine
         "zotero" => categoryId is not (CategoryIds.Folders or CategoryIds.Images or CategoryIds.Videos
                                        or CategoryIds.Music or CategoryIds.Applications or CategoryIds.Archives),
 
+        // 知识库笔记块：「正文命中」在这里同样近乎恒等于「全部」——
+        // 思源返回的每一行都是"某个块的内容"，只有占比极小的文档块（5275 里 97 个）算标题命中。
+        // 留着它只会让人以为"点一下能筛出正文"（其实什么也没筛掉），名字本身也误导。
+        "siyuan" => categoryId is not (CategoryIds.ContentMatches or CategoryIds.Folders or CategoryIds.Images
+                                       or CategoryIds.Videos or CategoryIds.Music or CategoryIds.Applications
+                                       or CategoryIds.Archives),
+
         _ => true,
     };
 }

@@ -52,10 +52,18 @@ public sealed class FusionStore
         else if (fused.Display.Path is null && r.Path is not null)
             fused.Display = fused.Display with { Path = r.Path, SizeBytes = r.SizeBytes ?? fused.Display.SizeBytes };
 
-        // 名称命中到了就把分类从“正文命中”纠正回实体本身
-        fused.CategoryId = fused.NameMatched || !fused.ContentMatched
-            ? _categories.Classify(fused.Display)
-            : CategoryIds.ContentMatches;
+        // 名称命中到了就把分类从“正文命中”纠正回实体本身。
+        // <para>
+        // <b>「正文命中」只对文件有意义</b>：它描述的是"文件名没中、里面的正文中了"这一组对立。
+        // 知识对象（思源的笔记块、无路径的条目）没有这组对立 —— 内容就是它本身，
+        // 硬套上去会让它们<b>全部丢掉自己的分类</b>：实测思源返回的 60 个块全落进「正文命中」，
+        // 而那个分类在思源下被隐藏（它恒等于全部），于是标签栏只剩一个计数为 0 的「全部」。
+        // </para>
+        var byKind = _categories.Classify(fused.Display);
+        fused.CategoryId = !fused.NameMatched && fused.ContentMatched
+                           && fused.Display.Path is { Length: > 0 }
+            ? CategoryIds.ContentMatches
+            : byKind;
 
         return fused;
     }

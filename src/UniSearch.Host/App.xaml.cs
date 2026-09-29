@@ -11,6 +11,7 @@ using UniSearch.Host.ViewModels;
 using UniSearch.Host.Views;
 using UniSearch.Providers.Anytxt;
 using UniSearch.Providers.Everything;
+using UniSearch.Providers.Siyuan;
 using UniSearch.Providers.Zotero;
 using UniSearch.Sdk.Capabilities;
 using UniSearch.Sdk.Runtime;
@@ -34,6 +35,7 @@ public partial class App : Application
     EverythingProvider? _everything;
     AnytxtProvider? _anytxt;
     ZoteroProvider? _zotero;
+    SiYuanProvider? _siyuan;
     List<ProviderEntry> _entries = [];
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -66,6 +68,7 @@ public partial class App : Application
         _everything = new EverythingProvider();
         _anytxt = new AnytxtProvider();
         _zotero = new ZoteroProvider();
+        _siyuan = new SiYuanProvider();
         _entries =
         [
             new(_everything, _everything.Descriptor)
@@ -84,6 +87,13 @@ public partial class App : Application
                 // 同理：默认可用、默认不自动参与。它还有个额外好处 ——
                 // Zotero 没开时调度器会按健康状态跳过，不会让每次输入都卡在探测上。
                 Enabled = _settingsStore.IsProviderEnabled(ZoteroProvider.ProviderId),
+            },
+            new(_siyuan, _siyuan.Descriptor)
+            {
+                // 思源同理。注意它的连接参数（host/port/token）走的是 providers.siyuan.options，
+                // 由 InitializeAsync 自己读 —— 跨机部署时没有这份配置就连不上，
+                // 但"连不上"会如实显示在来源栏（Down + Hint），不会静默变成"没有结果"。
+                Enabled = _settingsStore.IsProviderEnabled(SiYuanProvider.ProviderId),
             },
         ];
 
@@ -377,6 +387,22 @@ public partial class App : Application
                 timer.Stop();
                 try { if (_zotero is not null) await UiSelfTest.RunZoteroAsync(_zotero, log); }
                 catch (Exception ex) { log.Error("selftest", "Zotero 联调自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
+        // --selftest-siyuan：思源联调（打真服务，本次是跨机的 192.168.200.1:6806）——
+        // 凭证 / SQL 真被接受 / 笔记本计数与总块数对得上 / 作用域收敛 / 单引号转义。
+        if (e.Args.Contains("--selftest-siyuan", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+            timer.Tick += async (_, _) =>
+            {
+                timer.Stop();
+                try { if (_siyuan is not null) await UiSelfTest.RunSiyuanAsync(_siyuan, log); }
+                catch (Exception ex) { log.Error("selftest", "思源联调自检失败", ex); }
                 Quit();
             };
             timer.Start();

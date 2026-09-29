@@ -788,6 +788,10 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     /// <summary>展开面板里的全部候选值。</summary>
     public ObservableCollection<FacetCandidate> FacetCandidates { get; } = [];
 
+    /// <summary>
+    /// 已选值的真相：存的是<b>下推值</b>（<c>FacetValue.Pushdown</c>），不是显示名。
+    /// 思源的笔记本显示"R语言"而下推要 id —— 存显示名会让 SQL 查出 0 条（实测踩到）。
+    /// </summary>
     readonly List<string> _selectedFacetValues = [];
 
     /// <summary>读候选值失败的原因（要如实显示，不能装作"这个库里没有标签"）。</summary>
@@ -796,8 +800,12 @@ public sealed partial class SearchSessionViewModel : ObservableObject
 
     public bool HasFacetSelection => _selectedFacetValues.Count > 0;
 
-    /// <summary>已选值的原样列表（自检用）。</summary>
+    /// <summary>已选值的下推值列表（自检用）。</summary>
     public IReadOnlyList<string> SelectedFacetValues => _selectedFacetValues;
+
+    /// <summary>已选值的显示名（状态条与提示用；找不到候选就退回下推值本身）。</summary>
+    IReadOnlyList<string> SelectedFacetDisplays =>
+        _selectedFacetValues.Select(k => FacetCandidates.FirstOrDefault(c => c.Key == k)?.Value ?? k).ToList();
 
     /// <summary>锚点提示：必须说清"候选值是从后端拿的"，否则用户会以为是程序内置的固定列表。</summary>
     public string FacetAnchorTip
@@ -809,14 +817,14 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             if (_selectedFacetValues.Count == 0)
                 return $"{f.DisplayName}：候选值来自{source}自己" + (f.Tip is null ? "" : "\n" + f.Tip);
             return $"已选 {_selectedFacetValues.Count} 个{f.DisplayName}（{FacetMatchAllLabel}）\n来源：{source}\n" +
-                   string.Join("、", _selectedFacetValues);
+                   string.Join("、", SelectedFacetDisplays);
         }
     }
 
     /// <summary>状态条上的一句话口径（null = 没在按值域筛）。</summary>
     public string? FacetSummary => _selectedFacetValues.Count == 0 || ActiveFacet is not { } f
         ? null
-        : $"{f.DisplayName}：{string.Join("、", _selectedFacetValues)}（{FacetMatchAllLabel}）";
+        : $"{f.DisplayName}：{string.Join("、", SelectedFacetDisplays)}（{FacetMatchAllLabel}）";
 
     /// <summary>最近一次真正带上的值域选择（诊断用：一眼看出它有没有进查询）。</summary>
     public string? LastFacetLabel { get; private set; }
@@ -855,10 +863,15 @@ public sealed partial class SearchSessionViewModel : ObservableObject
     void SyncFacetSelection()
     {
         SelectedFacets.Clear();
-        foreach (var v in _selectedFacetValues) SelectedFacets.Add(new FacetChip(v));
+        foreach (var key in _selectedFacetValues)
+        {
+            // chip 显示名字、按 key 移除 —— 两者可能不同（思源的笔记本）
+            var display = FacetCandidates.FirstOrDefault(c => c.Key == key)?.Value ?? key;
+            SelectedFacets.Add(new FacetChip(key, display));
+        }
 
         foreach (var c in FacetCandidates)
-            c.IsChecked = _selectedFacetValues.Contains(c.Value);
+            c.IsChecked = _selectedFacetValues.Contains(c.Key);
 
         OnPropertyChanged(nameof(HasFacetSelection));
         OnPropertyChanged(nameof(FacetAnchorTip));
@@ -919,7 +932,10 @@ public sealed partial class SearchSessionViewModel : ObservableObject
 
             FacetCandidates.Clear();
             foreach (var v in values.Values)
-                FacetCandidates.Add(new FacetCandidate(v.Value, v.Count) { IsChecked = _selectedFacetValues.Contains(v.Value) });
+                FacetCandidates.Add(new FacetCandidate(v.Value, v.Count, v.Pushdown)
+                {
+                    IsChecked = _selectedFacetValues.Contains(v.Pushdown),
+                });
         }
         catch (Exception ex)
         {
@@ -1334,11 +1350,14 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         // 用 _tabGroups（「全部」时的基准），不是 _groups（当前可能已被筛过）；
         // 再按当前后端掐掉"在这个后端下没有意义"的分类（例如 AnyTXT 下的「正文命中」恒等于全部）。
         var scopeProvider = TemplateProviderId;
-        var shown = _tabGroups
-            .Where(g => g.CategoryId != CategoryIds.All &&
-                        CategoryEngine.AppliesToProvider(g.CategoryId, scopeProvider))
+        // ⚠ 「全部」的计数必须把所有分组都算进来，**不能只算可见的那几个** ——
+        // 被按后端隐藏的分类（AnyTXT/思源下的「正文命中」）照样有结果，
+        // 漏掉它们会让「全部(0)」和结果表里的几十行同时出现在屏幕上。
+        var allGroups = _tabGroups.Where(g => g.CategoryId != CategoryIds.All).ToList();
+        var shown = allGroups
+            .Where(g => CategoryEngine.AppliesToProvider(g.CategoryId, scopeProvider))
             .ToList();
-        var totalAll = shown.Sum(g => g.TotalAvailable);
+        var totalAll = allGroups.Sum(g => g.TotalAvailable);
         var tabs = new List<CategoryTab>
         {
             new(CategoryIds.All, "全部", totalAll, SnapshotMapper.GlyphFor(CategoryIds.All), 0),

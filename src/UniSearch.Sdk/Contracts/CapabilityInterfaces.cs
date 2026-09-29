@@ -138,5 +138,18 @@ public sealed record FacetValues(string FacetId, IReadOnlyList<FacetValue> Value
     public bool Ok => Error is null;
 }
 
+/// <param name="Value">给人看的显示名。</param>
 /// <param name="Count">该值下的条目数（后端给的，不是已返回子集的口径）。</param>
-public sealed record FacetValue(string Value, long Count);
+/// <param name="Key">
+/// 下推给后端用的值。<c>null</c> = 与 <see cref="Value"/> 相同（大多数场合如此，例如 Zotero 的标签）。
+/// <para>
+/// <b>为什么显示名与下推值必须分开</b>：思源的笔记本，给人看的是名字（"R语言"），
+/// 而 SQL 里要的是 id（<c>20251209154600-9kzscxv</c>）。第一版把名字当成下推值送过去，
+/// 结果 <c>box IN ('R语言')</c> 永远 0 条 —— 界面上看不出哪里错了（实测踩到）。
+/// </para>
+/// </param>
+public sealed record FacetValue(string Value, long Count, string? Key = null)
+{
+    /// <summary>真正送给后端的那个值。</summary>
+    public string Pushdown => Key is { Length: > 0 } k ? k : Value;
+}

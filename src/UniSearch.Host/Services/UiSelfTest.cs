@@ -851,7 +851,7 @@ public static class UiSelfTest
     {
         log.Info("selftest", $"=== 标签有效性自检：查询「{query}」 ===");
 
-        var providers = new[] { "everything", "anytxt", "zotero" };
+        var providers = new[] { "everything", "anytxt", "zotero", "siyuan" };
         var bad = new List<string>();
 
         foreach (var provider in providers)
@@ -1537,5 +1537,192 @@ public static class UiSelfTest
             // 取不到就当没有集合，不影响别的断言
         }
         return null;
+    }
+
+    // ───────────────────────── 思源（US-16）─────────────────────────
+
+    /// <summary>
+    /// 思源联调自检：打真服务（本次是跨机的 <c>192.168.200.1:6806</c>）。
+    /// <para>
+    /// 单测覆盖纯函数（SQL 翻译 / 行映射）；这里覆盖只有真跑才知道的事：
+    /// <b>凭证对不对</b>、SQL 真的被内核接受了、笔记本计数与总块数对得上、
+    /// 作用域真的收敛、以及<b>含单引号的查询不炸</b>（转义纪律的现场验证）。
+    /// </para>
+    /// <para>
+    /// 查询词<b>现场从库里取</b>（拿一条文档块的标题），不写死 —— 写死一个 "GEO"
+    /// 就是把断言绑在用户笔记的内容上，改个标题就红。
+    /// </para>
+    /// </summary>
+    public static async Task RunSiyuanAsync(UniSearch.Providers.Siyuan.SiYuanProvider provider, IUniSearchLog log)
+    {
+        var ok = true;
+        log.Info("selftest", "=== 思源联调自检 ===");
+
+        var health = await provider.ProbeHealthAsync(CancellationToken.None).ConfigureAwait(false);
+        log.Info("selftest", $"① 健康：{health.State} · 版本={health.Version ?? "-"} · {health.Detail ?? "-"}");
+        if (health.State != UniSearch.Sdk.Contracts.HealthState.Ready)
+        {
+            log.Warn("selftest", $"思源不可用（{health.Detail}）—— 联调自检跳过" +
+                                 (health.Hint is null ? "" : $"；提示：{health.Hint}"));
+            return;
+        }
+        log.Info("selftest", $"   地址：{provider.Options.Host}:{provider.Options.Port}" +
+                             $"（凭证：{(provider.Options.Token is null ? "无" : "已配置")}）");
+
+        // ② 库的规模：总数与笔记本清单（凭证不对时这里就会失败，且提示要指得准）
+        var facets = await provider.GetFacetValuesAsync(UniSearch.Providers.Siyuan.SiYuanProvider.NotebookFacetId,
+                                                        UniSearch.Sdk.Capabilities.SearchContext.Global(),
+                                                        CancellationToken.None).ConfigureAwait(false);
+        log.Info("selftest", $"② 笔记本值域：{(facets.Ok ? $"{facets.Values.Count} 个" : "失败：" + facets.Error)}");
+        foreach (var v in facets.Values.Take(12))
+            log.Info("selftest", $"     {v.Value}  ({v.Count} 块)");
+        var facetOk = facets.Ok && facets.Values.Count > 0 && facets.Values.All(v => v.Count > 0);
+        ok &= facetOk;
+        log.Info("selftest", $"   断言：有笔记本且每个都有块 -> {(facetOk ? "PASS" : "FAIL")}");
+
+        var baseTotal = facets.Values.Sum(v => v.Count);
+        log.Info("selftest", $"   全库块数（各笔记本之和）= {baseTotal}");
+
+        // ③ 拿一条真实文档块的标题当查询词
+        var (probeWord, probeBox) = await FirstDocTitleAsync(provider).ConfigureAwait(false);
+        if (probeWord is null)
+        {
+            log.Warn("selftest", "③ 跳过：库里没有可当查询词的文档块标题");
+            log.Info("selftest", ok ? "思源联调自检：全部通过 ✓" : "思源联调自检：有失败 ✗");
+            return;
+        }
+        log.Info("selftest", $"③ 查询词（取自真实文档标题）：「{probeWord}」");
+
+        var (hits, total, batches) = await CollectSiyuanAsync(provider, probeWord).ConfigureAwait(false);
+        var hitOk = hits.Count > 0 && hits.All(r => r.ProviderId == "siyuan")
+                    && hits.All(r => r.ProviderItemId.Length > 0)
+                    && hits.All(r => r.Uri is { Length: > 0 } u && u.StartsWith("siyuan://blocks/", StringComparison.Ordinal))
+                    // 跨机部署：磁盘上没有 .sy 文件，填了 Path 只会让"打开/预览"指向不存在的文件
+                    && hits.All(r => r.Path is null);
+        ok &= hitOk;
+        log.Info("selftest", $"   行={hits.Count} 总数={total} 批次={batches}");
+        log.Info("selftest", $"   断言：有行 / 有块 id / 有 siyuan:// URI / 无假路径 -> {(hitOk ? "PASS" : "FAIL")}");
+        foreach (var r in hits.Take(3))
+            log.Info("selftest", $"     [{r.Kind}] {r.Title}  —— {r.Subtitle}");
+
+        // ④ 命中的行里必须能找到那条文档自己（查询词就是从它标题里取的）
+        var selfHit = hits.Any(r => r.Kind == UniSearch.Sdk.Model.ResultKind.Document);
+        log.Info("selftest", $"④ 结果里含文档块 -> {(selfHit ? "PASS" : "FAIL：标题命中的文档块没回来")}");
+        ok &= selfHit;
+
+        // ⑤ 笔记本作用域真的收敛
+        if (probeBox is { Length: > 0 })
+        {
+            var (scoped, scopedTotal, _) = await CollectSiyuanAsync(provider, probeWord, probeBox).ConfigureAwait(false);
+            // 限定了笔记本之后，回来的每一行都该属于那个笔记本
+            var strays = scoped.Count(r => !r.Metadata.TryGetValue("boxId", out var b) || b != probeBox);
+            var scopeOk = scoped.Count > 0 && scoped.Count <= hits.Count && strays == 0;
+            log.Info("selftest", $"⑤ 限定到笔记本 {probeBox} -> 行={scoped.Count}（不限定时 {hits.Count}）" +
+                                 $" 跑出作用域的行={strays} -> {(scopeOk ? "PASS：确实收敛了" : "FAIL")}");
+            ok &= scopeOk;
+        }
+
+        // ⑥ 头号纪律的现场验证：含单引号的查询必须被内核正常接受（而不是 SQL 语法错误）
+        var (quoted, _, _) = await CollectSiyuanAsync(provider, "it's").ConfigureAwait(false);
+        var (danger, _, _) = await CollectSiyuanAsync(provider, "'; DROP TABLE blocks;--").ConfigureAwait(false);
+        var (stillAlive, _, _) = await CollectSiyuanAsync(provider, probeWord).ConfigureAwait(false);
+        var injectOk = stillAlive.Count > 0;
+        ok &= injectOk;
+        log.Info("selftest", $"⑥ 含单引号查询 -> 行={quoted.Count}；注入尝试 -> 行={danger.Count}；" +
+                             $"之后同一查询仍有 {stillAlive.Count} 行");
+        log.Info("selftest", $"   断言：注入尝试没炸掉库（转义生效）-> {(injectOk ? "PASS" : "FAIL")}");
+
+        // ⑦ 值域下推：选一个笔记本后，后端报的总数必须等于该笔记本自己的块数。
+        //    ⚠ 走的是 **Facets**（UI 上点 chip 就是这条路），不是 NamedScope ——
+        //    两者虽然最终都拼成 box=，但 UI 那条路多一层"显示名 → 下推值"的转换，
+        //    第一版就是在这里错的（把笔记本名字当成了 box 值，永远 0 条）。
+        if (facets.Ok && facets.Values.Count > 0)
+        {
+            var pick = facets.Values.OrderBy(v => v.Count).First();
+            var facetSel = new UniSearch.Sdk.Model.FacetSelection(
+                UniSearch.Providers.Siyuan.SiYuanProvider.NotebookFacetId, [pick.Pushdown]);
+
+            var (inBox, boxTotal, _) = await CollectSiyuanAsync(provider, "", facets: [facetSel]).ConfigureAwait(false);
+            var pushOk = boxTotal == pick.Count;
+            var rowsBelong = inBox.All(r => r.Metadata.TryGetValue("boxId", out var b) && b == pick.Pushdown);
+            ok &= pushOk && rowsBelong;
+            log.Info("selftest", $"⑦ 值域下推「{pick.Value}」（下推值 {pick.Pushdown}）-> 后端总数={boxTotal}" +
+                                 $"（值域面板说 {pick.Count}），行={inBox.Count}，越界的行={inBox.Count - inBox.Count(r => r.Metadata.TryGetValue("boxId", out var b) && b == pick.Pushdown)}");
+            log.Info("selftest", $"   断言：总数一致 且 每行都属于该笔记本 -> {(pushOk && rowsBelong ? "PASS" : "FAIL")}");
+        }
+
+        log.Info("selftest", ok ? "思源联调自检：全部通过 ✓" : "思源联调自检：有失败 ✗");
+    }
+
+    static string? NotebookOf(string subtitle)
+    {
+        // Subtitle 形状是 "类型 · 笔记本 · 路径尾段"，取第二段
+        var parts = subtitle.Split('·');
+        return parts.Length >= 2 ? parts[1].Trim() : null;
+    }
+
+    /// <summary>取一条真实文档块的标题当查询词（连同它所在的笔记本 id）。</summary>
+    static async Task<(string? Word, string? Box)> FirstDocTitleAsync(
+        UniSearch.Providers.Siyuan.SiYuanProvider provider)
+    {
+        var (rows, _, _) = await CollectSiyuanAsync(provider, "", kinds:
+            [UniSearch.Sdk.Model.ResultKind.Document]).ConfigureAwait(false);
+        foreach (var r in rows)
+        {
+            var t = r.Title.Trim();
+            if (t.Length < 2) continue;
+            if (!r.Metadata.TryGetValue("boxId", out var boxId) || boxId.Length == 0) continue;
+            return (t, boxId);
+        }
+        return (null, null);
+    }
+
+    static async Task<string?> BoxIdOfAsync(UniSearch.Providers.Siyuan.SiYuanProvider provider, string notebookName)
+    {
+        await Task.CompletedTask.ConfigureAwait(false);
+        var names = provider.NotebookIdsByName();
+        return names.TryGetValue(notebookName, out var id) ? id : null;
+    }
+
+    static async Task<(List<UniSearch.Sdk.Model.SearchResult> Rows, int Total, int Batches)> CollectSiyuanAsync(
+        UniSearch.Providers.Siyuan.SiYuanProvider provider,
+        string text,
+        string? boxScope = null,
+        IReadOnlyList<UniSearch.Sdk.Model.ResultKind>? kinds = null,
+        IReadOnlyList<UniSearch.Sdk.Model.FacetSelection>? facets = null)
+    {
+        var filters = UniSearch.Sdk.Model.QueryFilters.None;
+        if (kinds is not null) filters = filters with { Kinds = kinds };
+        if (facets is not null) filters = filters with { Facets = facets };
+
+        var query = new UniSearch.Sdk.Model.SearchQuery
+        {
+            RequestId = 1,
+            RawText = text,
+            Text = text,
+            ProviderText = text,
+            Terms = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(t => t.ToLowerInvariant()).ToList(),
+            ResultBudget = 50,
+            Filters = filters,
+        };
+
+        var context = boxScope is { Length: > 0 }
+            ? UniSearch.Sdk.Capabilities.SearchContext.Global() with
+              {
+                  Scope = UniSearch.Sdk.Capabilities.ScopeKind.NamedScope,
+                  NamedScope = UniSearch.Providers.Siyuan.SiYuanProvider.NotebookScopePrefix + boxScope,
+              }
+            : UniSearch.Sdk.Capabilities.SearchContext.Global();
+
+        var rows = new List<UniSearch.Sdk.Model.SearchResult>();
+        var total = 0;
+        var batches = 0;
+        await foreach (var b in provider.SearchAsync(query, context, CancellationToken.None).ConfigureAwait(false))
+        {
+            batches++;
+            rows.AddRange(b.Results);
+            if (b.TotalAvailable is { } t) total = t;
+        }
+        return (rows, total, batches);
     }
 }

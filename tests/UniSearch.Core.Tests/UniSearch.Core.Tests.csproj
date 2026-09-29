@@ -15,5 +15,6 @@
     <ProjectReference Include="..\..\src\UniSearch.Providers.Everything\UniSearch.Providers.Everything.csproj" />
     <ProjectReference Include="..\..\src\UniSearch.Providers.Anytxt\UniSearch.Providers.Anytxt.csproj" />
     <ProjectReference Include="..\..\src\UniSearch.Providers.Zotero\UniSearch.Providers.Zotero.csproj" />
+    <ProjectReference Include="..\..\src\UniSearch.Providers.Siyuan\UniSearch.Providers.Siyuan.csproj" />
   </ItemGroup>
 </Project>

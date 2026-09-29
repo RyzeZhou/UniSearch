@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>UniSearch.Providers.Siyuan</RootNamespace>
+    <Description>第一方 Provider：思源笔记内核 HTTP API（知识库块级检索）。</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UniSearch.Sdk\UniSearch.Sdk.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 翻译器与映射是纯函数，最值得逐条断言；但它们是实现细节，不该进公开 API 面。 -->
+    <InternalsVisibleTo Include="UniSearch.Core.Tests" />
+  </ItemGroup>
+</Project>

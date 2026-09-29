@@ -44,5 +44,6 @@
   <ItemGroup>
     <ProjectReference Include="..\UniSearch.Providers.Anytxt\UniSearch.Providers.Anytxt.csproj" />
     <ProjectReference Include="..\UniSearch.Providers.Zotero\UniSearch.Providers.Zotero.csproj" />
+    <ProjectReference Include="..\UniSearch.Providers.Siyuan\UniSearch.Providers.Siyuan.csproj" />
   </ItemGroup>
 </Project>

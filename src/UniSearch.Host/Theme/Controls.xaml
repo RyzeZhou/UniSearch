@@ -379,17 +379,17 @@
                 <!-- AutomationProperties 挂在这块 TextBlock 上而不是外层 Border 上：
                      只有带 AutomationPeer 的元素才会进 UIA 树，Border 没有 peer，
                      挂在它上面的标识在自动化里根本查不到（验证脚本踩到过）。 -->
-                <TextBlock Text="{Binding Value}" VerticalAlignment="Center"
+                <TextBlock Text="{Binding Display}" VerticalAlignment="Center"
                            AutomationProperties.AutomationId="FacetChip"
-                           AutomationProperties.Name="{Binding Value}"
+                           AutomationProperties.Name="{Binding Display}"
                            FontFamily="{StaticResource Font.Text}"
                            FontSize="{StaticResource Font.Size.FilterTab}"
                            Foreground="{StaticResource Brush.Text.OnAccent}"/>
                 <Button Style="{x:Null}" Margin="4,0,0,0" Padding="0" Cursor="Hand" MinWidth="0"
                         Background="Transparent" BorderThickness="0" Focusable="False"
-                        ToolTip="去掉这个标签"
+                        ToolTip="去掉这个值"
                         Command="{Binding DataContext.RemoveFacetValueCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                        CommandParameter="{Binding Value}">
+                        CommandParameter="{Binding Key}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="Cx" CornerRadius="2" Padding="1,0" Background="Transparent">
@@ -415,7 +415,7 @@
     <DataTemplate x:Key="FacetCandidateTemplate" DataType="{x:Type vm:FacetCandidate}">
         <Button Style="{x:Null}" HorizontalContentAlignment="Stretch" Cursor="Hand"
                 Command="{Binding DataContext.ToggleFacetValueCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                CommandParameter="{Binding Value}"
+                CommandParameter="{Binding Key}"
                 AutomationProperties.AutomationId="FacetValue"
                 AutomationProperties.Name="{Binding Display}"
                 ToolTip="{Binding Value}">
