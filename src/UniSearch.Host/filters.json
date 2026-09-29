@@ -67,10 +67,10 @@
     },
     {
       "id": "zot-notes",
-      "name": "笔记",
+      "name": "笔记条目",
       "order": 420,
       "glyph": "E70B",
-      "description": "Zotero 里自己写的笔记",
+      "description": "Zotero 里自己写的笔记（服务端按 itemType=note 筛，与内置分类「笔记」是同一批数据，但下推后不受结果预算限制）",
       "providers": ["zotero"],
       "subtypes": ["note"]
     },

@@ -30,9 +30,13 @@ namespace UniSearch.Providers.Zotero;
 [UniSearchProvider("zotero", "Zotero", ApiVersion = 1, RequiredApp = "Zotero",
     InstallHint = "https://www.zotero.org/download/")]
 public sealed class ZoteroProvider : ISearchProvider, IGlobalScopeProvider, IActionProvider,
-                                     IExternalUiProvider
+                                     IExternalUiProvider, IFacetProvider
 {
     public const string ProviderId = "zotero";
+
+    /// <summary>标签值域的 id。<b>与 Zotero 的查询参数同名</b>（<c>tag=</c>）—— 这不是巧合，
+    /// 少一层"域 id → 参数名"的映射，就少一处两边的名字能对不上的地方。</summary>
+    public const string TagFacetId = "tag";
 
     /// <summary>集合范围的标识前缀（与 SDK 文档里的 <c>zotero:collection/&lt;KEY&gt;</c> 一致）。</summary>
     public const string CollectionScopePrefix = "zotero:collection/";
@@ -121,6 +125,45 @@ public sealed class ZoteroProvider : ISearchProvider, IGlobalScopeProvider, IAct
 
     public bool EnabledForGlobalScope(SearchContext context) => true;
 
+    // ───────────────────────── 值域筛选（标签） ─────────────────────────
+
+    /// <summary>
+    /// 只有"标签"这一个值域。Zotero 的字段有 40 种条目类型 × 246 个字段，但<b>能筛的只有三个</b>
+    /// （类型 / 标签 / 集合，实测见 ZOTERO-LOCAL-API-VERIFIED.md §3）：类型已经由标签栏的
+    /// "条目类型"筛选器走 <c>itemType=</c> 下推，集合是范围不是筛选，所以这里只声明标签。
+    /// </summary>
+    public IReadOnlyList<FacetDescriptor> Facets { get; } =
+    [
+        new(TagFacetId, "标签", "\uE8EC", MatchAllDefault: false,
+            Tip: "候选标签来自 Zotero 自己的标签库。多选默认「任一命中」—— 按「全部命中」时两个冷门标签的交集常常是 0 条。"),
+    ];
+
+    public async ValueTask<FacetValues> GetFacetValuesAsync(string facetId, SearchContext context, CancellationToken ct)
+    {
+        if (!string.Equals(facetId, TagFacetId, StringComparison.OrdinalIgnoreCase))
+            return FacetValues.Failed(facetId, $"Zotero 没有「{facetId}」这个值域");
+
+        ZoteroTagList tags;
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            tags = await _client.GetTagsAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (!tags.Ok)
+        {
+            _runtime?.Log.Warn(ProviderId, $"读取标签库失败：{tags.Error}");
+            return FacetValues.Failed(facetId, tags.Error ?? "读取标签库失败");
+        }
+
+        _runtime?.Log.Debug(ProviderId, $"标签库 {tags.Tags.Count} 个");
+        return new FacetValues(facetId, tags.Tags.Select(t => new FacetValue(t.Name, t.Count)).ToList());
+    }
+
     // ───────────────────────── 搜索 ─────────────────────────
 
     public async IAsyncEnumerable<SearchBatch> SearchAsync(
@@ -157,7 +200,9 @@ public sealed class ZoteroProvider : ISearchProvider, IGlobalScopeProvider, IAct
         var rows = ZoteroItemMapper.MapArray(response.Root, response.Total);
         _runtime?.Log.Debug(ProviderId,
             $"{translation.Request.Path} q={translation.Request.Q ?? "-"} qmode={translation.Request.Qmode ?? "-"} " +
-            $"itemType={translation.Request.ItemType ?? "-"} -> {rows.Count} 行（总数 {response.Total?.ToString() ?? "?"}）");
+            $"itemType={translation.Request.ItemType ?? "-"} " +
+            $"tag={(translation.Request.Tags.Count == 0 ? "-" : string.Join(" ; ", translation.Request.Tags))} " +
+            $"-> {rows.Count} 行（总数 {response.Total?.ToString() ?? "?"}）");
 
         yield return SearchBatch.Of(ProviderId, query.RequestId, rows, response.Total, isLast: true);
     }

@@ -150,11 +150,53 @@ public sealed class ZoteroApiClient : IDisposable
     }
 
     /// <summary>
+    /// 取整个标签库（<c>GET /users/0/tags</c>）。
+    /// <para>
+    /// <b>limit=0 就是"全部"</b>（实测：返回 17 条 = 库里全部标签），所以不用翻页 ——
+    /// 标签是给人勾选的短列表，为它实现 <c>Link</c> 头的翻页只会让 UI 变复杂。
+    /// 万一将来标签上千，这里要改成按需搜索，而不是在 UI 上摊一千行。
+    /// </para>
+    /// <para>顺序<b>保持后端给的字母序</b>，不按条目数重排 —— 与 Zotero 自己的标签选择器一致，
+    /// 用户在两处看到的是同一个顺序。</para>
+    /// </summary>
+    public async Task<ZoteroTagList> GetTagsAsync(CancellationToken ct)
+    {
+        var query = new List<KeyValuePair<string, string>>
+        {
+            new("limit", "0"),
+            new("format", "json"),
+        };
+
+        var resp = await GetAsync("/users/0/tags", query, ct).ConfigureAwait(false);
+        if (!resp.Ok) return ZoteroTagList.Failed(resp.Error ?? "读取标签失败", resp.Hint);
+
+        var list = new List<ZoteroTag>();
+        if (resp.Root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var t in resp.Root.EnumerateArray())
+            {
+                if (t.ValueKind != JsonValueKind.Object) continue;
+                if (!t.TryGetProperty("tag", out var nameEl) || nameEl.ValueKind != JsonValueKind.String) continue;
+                var name = nameEl.GetString();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                long count = 0;
+                if (t.TryGetProperty("meta", out var meta) && meta.ValueKind == JsonValueKind.Object &&
+                    meta.TryGetProperty("numItems", out var n) && n.TryGetInt64(out var v))
+                    count = v;
+
+                list.Add(new ZoteroTag(name!, count));
+            }
+        }
+
+        return new ZoteroTagList(true, list, null, null);
+    }
+
+    /// <summary>
     /// 拼 URL。<b>自己编码</b>而不是让 HttpClient 拼 Query：
     /// Zotero 的 <c>||</c>、<c>-</c>、空格都要按字面送过去，编码方式错一个字符语义就变了。
     /// </summary>
-    internal static string BuildUrl(string baseUrl, string path, IReadOnlyList<KeyValuePair<string, string>> query)
-    {
+    internal static string BuildUrl(string baseUrl, string path, IReadOnlyList<KeyValuePair<string, string>> query)    {
         var sb = new System.Text.StringBuilder(baseUrl.TrimEnd('/')).Append(path);
         if (query.Count == 0) return sb.ToString();
 
@@ -190,3 +232,13 @@ public sealed record ZoteroResponse(bool Ok, JsonElement Root, int? Total, strin
 
 /// <summary>本地 API 探测结果（不涉及响应体，只看状态码与响应头）。</summary>
 public sealed record ZoteroProbe(bool Available, int StatusCode, string? Version, string? Error, string? Hint);
+
+/// <param name="Count">该标签下的条目数（来自每条标签的 <c>meta.numItems</c>）。</param>
+public sealed record ZoteroTag(string Name, long Count);
+
+/// <summary>标签库读取结果。<see cref="Error"/> 非空时 <see cref="Tags"/> 必为空 ——
+/// 调用方要能区分"没有标签"和"读不到标签"。</summary>
+public sealed record ZoteroTagList(bool Ok, IReadOnlyList<ZoteroTag> Tags, string? Error, string? Hint)
+{
+    public static ZoteroTagList Failed(string error, string? hint = null) => new(false, [], error, hint);
+}

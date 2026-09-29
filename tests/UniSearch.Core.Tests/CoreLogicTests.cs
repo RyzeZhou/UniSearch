@@ -516,8 +516,52 @@ public class CoreLogicTests
         Assert.Equal(2, ProviderSelector.Select(entries, SearchContext.Global(), empty).Selected.Count);
     }
 
-    // ───────────────── 列排序（详细列表）─────────────────
+    // ───────────────── 值域筛选（IFacetProvider）─────────────────
+    // 候选值来自后端的条件（Zotero 的标签），只有能把它下推进自己查询的后端才该跑。
+    // 不做前端近似：拿 Zotero 的标签去匹配 Everything 的文件行只会得到空列表。
 
+    sealed class FacetProvider(string id, ProviderCapability caps, int priority = 50)
+        : FakeProvider(id, caps, priority), IFacetProvider
+    {
+        public IReadOnlyList<FacetDescriptor> Facets { get; } = [new("tag", "标签", "\uE8EC")];
+        public ValueTask<FacetValues> GetFacetValuesAsync(string facetId, SearchContext ctx, CancellationToken ct)
+            => ValueTask.FromResult(new FacetValues(facetId, [new FacetValue("蛋白设计", 3)]));
+    }
+
+    static SearchQuery WithFacet(SearchQuery q) =>
+        q with { Filters = q.Filters with { Facets = [new FacetSelection("tag", ["蛋白设计"])] } };
+
+    [Fact]
+    public void Facet_filter_keeps_only_providers_that_can_push_it_down()
+    {
+        var everything = new ScopedProvider("everything", FileCaps, 100);
+        var zotero = new FacetProvider("zotero", FileCaps | ProviderCapability.ReturnsBibliographicItems, 60);
+
+        var sel = ProviderSelector.Select(
+            [new ProviderEntry(everything, everything.Descriptor), new ProviderEntry(zotero, zotero.Descriptor)],
+            SearchContext.Global(), WithFacet(QueryParser.Parse(1, "x")));
+
+        Assert.Equal(["zotero"], sel.Selected.Select(s => s.Descriptor.Id));
+        Assert.Equal(SkipReason.NotApplicableToFacetFilter, Assert.Single(sel.Skipped).Reason);
+    }
+
+    [Fact]
+    public void Facet_filter_changes_nothing_when_no_facet_is_selected()
+    {
+        var everything = new ScopedProvider("everything", FileCaps, 100);
+        var zotero = new FacetProvider("zotero", FileCaps, 60);
+        var entries = new[] { new ProviderEntry(everything, everything.Descriptor), new ProviderEntry(zotero, zotero.Descriptor) };
+
+        // 空壳选择（域在、值空）不该被当成"要筛" —— 否则选完再取消就会少一个后端
+        var shell = QueryParser.Parse(1, "x") with
+        {
+            Filters = QueryFilters.None with { Facets = [new FacetSelection("tag", [])] },
+        };
+        Assert.Equal(2, ProviderSelector.Select(entries, SearchContext.Global(), shell).Selected.Count);
+        Assert.Equal(2, ProviderSelector.Select(entries, SearchContext.Global(), QueryParser.Parse(1, "x")).Selected.Count);
+    }
+
+    // ───────────────── 列排序（详细列表）─────────────────
     static FusedResult Fused(string title, long? size = null, string? path = null,
                              DateTimeOffset? modified = null, bool folder = false, double score = 0)
     {

@@ -438,4 +438,119 @@ public class ZoteroProviderTests
         Assert.False(p is UniSearch.Sdk.Contracts.IFileSystemScopedProvider);
         Assert.True(p is UniSearch.Sdk.Contracts.IGlobalScopeProvider);
     }
+
+    // ───────────────────────── 值域（标签）下推 ─────────────────────────
+    //
+    // 下面这些断言的语义全部是**本机实测**出来的（Zotero 10.0.3，库内 106 条 / 17 个标签）：
+    //   tag=蛋白设计            -> 3
+    //   tag=蛋白设计&tag=小分子 -> 0     （重复参数 = AND）
+    //   tag=蛋白设计||小分子    -> 5     （|| = OR）
+    //   tag="蛋白设计"          -> 0     （引号**不是**精确短语语法，是字面匹配）
+
+    static QueryFilters WithTags(params string[] values) => QueryFilters.None with
+    {
+        Facets = [new FacetSelection(ZoteroProvider.TagFacetId, values)],
+    };
+
+    [Fact]
+    public void Translate_pushes_a_single_tag_down_verbatim()
+    {
+        var t = ZoteroQueryTranslator.Translate(Query("", WithTags("蛋白设计")), 60);
+
+        Assert.Equal(["蛋白设计"], t.Request.Tags);
+        Assert.DoesNotContain(t.Request.Query, kv => kv.Key == "tag" && kv.Value.Contains('"'));
+    }
+
+    [Fact]
+    public void Translate_joins_several_tags_with_or_by_default()
+    {
+        var t = ZoteroQueryTranslator.Translate(Query("", WithTags("蛋白设计", "小分子")), 60);
+
+        // 一个参数值里放布尔式（URL 上就是一个 tag=）；这是 OR 口径唯一表达得出来的形式
+        Assert.Equal(["蛋白设计 || 小分子"], t.Request.Tags);
+    }
+
+    [Fact]
+    public void Translate_repeats_the_parameter_when_match_all_is_asked_for()
+    {
+        var filters = WithTags("蛋白设计", "小分子") with
+        {
+            Facets = [new FacetSelection(ZoteroProvider.TagFacetId, ["蛋白设计", "小分子"], MatchAll: true)],
+        };
+        var t = ZoteroQueryTranslator.Translate(Query("", filters), 60);
+
+        // AND 只能靠重复参数名；拼成一个串是表达不出来的
+        Assert.Equal(["蛋白设计", "小分子"], t.Request.Tags);
+    }
+
+    [Fact]
+    public void Translate_never_wraps_a_tag_in_quotes()
+    {
+        // 官方 v3 文档写着 tag="exact phrase"，本地端点实测却是 0 条 —— 引号被当成标签名的一部分。
+        // 这条断言就是防止将来有人"顺手"按文档给它加引号。
+        var t = ZoteroQueryTranslator.Translate(Query("", WithTags("DNA 合成")), 60);
+
+        Assert.Equal(["DNA 合成"], t.Request.Tags);
+        Assert.DoesNotContain('"', t.Request.Tags[0]);
+    }
+
+    [Fact]
+    public void Translate_drops_a_tag_containing_the_or_separator_and_says_so()
+    {
+        var t = ZoteroQueryTranslator.Translate(Query("", WithTags("a||b", "蛋白设计")), 60);
+
+        Assert.Equal(["蛋白设计"], t.Request.Tags);                       // 坏值被丢掉，好值照常下推
+        Assert.Contains(t.Notes, n => n.Contains("a||b"));
+    }
+
+    [Fact]
+    public void Translate_treats_tags_as_a_pushable_condition()
+    {
+        // 只有标签、没有关键词时，不该报"没有可下推的条件"——标签就是条件
+        var withTag = ZoteroQueryTranslator.Translate(Query("", WithTags("蛋白设计")), 60);
+        Assert.DoesNotContain(withTag.Notes, n => n.Contains("没有可下推的条件"));
+
+        var bare = ZoteroQueryTranslator.Translate(Query(""), 60);
+        Assert.Contains(bare.Notes, n => n.Contains("没有可下推的条件"));
+    }
+
+    [Fact]
+    public void Translate_sends_no_tag_parameter_when_nothing_is_selected()
+    {
+        var t = ZoteroQueryTranslator.Translate(Query("protein"), 60);
+        Assert.Empty(t.Request.Tags);
+
+        // 空壳选择（域在、值空）同样不该产生参数 —— UI 允许留一个没选任何值的空壳
+        var shell = ZoteroQueryTranslator.Translate(
+            Query("protein", QueryFilters.None with
+            {
+                Facets = [new FacetSelection(ZoteroProvider.TagFacetId, [])],
+            }), 60);
+        Assert.Empty(shell.Request.Tags);
+    }
+
+    [Fact]
+    public void Provider_declares_exactly_one_facet_and_it_is_the_tag_domain()
+    {
+        var p = new ZoteroProvider();
+        var facet = Assert.Single(p.Facets);
+
+        // 域 id 与 Zotero 的查询参数同名（tag）—— 少一层映射就少一处能对不上的地方
+        Assert.Equal("tag", facet.Id);
+        Assert.False(facet.MatchAllDefault);   // 默认"任一"：AND 时两个冷门标签的交集常常是 0 条
+    }
+
+    [Fact]
+    public void MapItemType_and_tags_coexist_in_one_request()
+    {
+        var filters = WithTags("机器学习") with
+        {
+            Subtypes = ["journal-article"],
+        };
+        var t = ZoteroQueryTranslator.Translate(Query("ESM", filters), 60);
+
+        Assert.Equal("ESM", t.Request.Q);
+        Assert.Equal("journalArticle", t.Request.ItemType);
+        Assert.Equal(["机器学习"], t.Request.Tags);
+    }
 }

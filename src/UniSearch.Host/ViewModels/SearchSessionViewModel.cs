@@ -682,6 +682,10 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             ? Catalog.FindTemplate(sid)
             : Catalog.ResolveTemplate(pid, Lookup(_pinnedTemplates, pid), Lookup(_deploymentTemplates, pid));
 
+        // 换来源 → 值域形状与候选值都变了（Zotero 的标签在 Everything 下不存在）。
+        // 必须做在 BuildTabs/重查之前：否则会带着上一个后端的标签去问新后端。
+        if (providerChanged) ResetFacetSelection();
+
         RebuildTemplateOptions();
         OnPropertyChanged(nameof(ActiveTemplate));
         OnPropertyChanged(nameof(HasTemplates));
@@ -689,6 +693,7 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         OnPropertyChanged(nameof(IsTemplatePinned));
         OnPropertyChanged(nameof(TemplateFollowsDefault));
         OnPropertyChanged(nameof(TemplateAnchorTip));
+        NotifyFacetShape();
 
         BuildTabs();
 
@@ -713,6 +718,219 @@ public sealed partial class SearchSessionViewModel : ObservableObject
 
     static string? Lookup(Dictionary<string, string> map, string? key) =>
         key is { Length: > 0 } && map.TryGetValue(key, out var v) && v.Length > 0 ? v : null;
+
+    // ── 值域筛选器（候选值来自后端，见 IFacetProvider）─────────────────────────
+    // 和前两种筛选都不一样：内置分类的值域是宿主的分类体系，filters.json 筛选器的值域是
+    // 定义文件写的扩展名/类型，而这里的值域**只有后端自己知道**（Zotero 有哪些标签）。
+    // 所以它不摊在标签栏上（标签可能上百个），而是一枚"点开才展开"的锚点：
+    // 顶部只回显已选的那几个，展开面板里才是全部候选值。
+
+    /// <summary>当前后端支持的值域。<b>只取第一个</b> —— 真有第二个（集合之类）时，
+    /// 这一块要改成"锚点列表"，而不是在这里加分支。</summary>
+    public FacetDescriptor? ActiveFacet
+    {
+        get
+        {
+            var p = ActiveFacetProvider();
+            return p is { Facets.Count: > 0 } ? p.Facets[0] : null;
+        }
+    }
+
+    /// <summary>当前"那个后端"的值域能力。与模板用同一个后端口径（<see cref="TemplateProviderId"/>）——
+    /// 两个机制都在回答"现在是谁在给我供数据"。</summary>
+    IFacetProvider? ActiveFacetProvider()
+    {
+        if (TemplateProviderId is not { Length: > 0 } pid) return null;
+        foreach (var e in _broker.Providers)
+            if (string.Equals(e.Descriptor.Id, pid, StringComparison.OrdinalIgnoreCase))
+                return e.Provider as IFacetProvider;
+        return null;
+    }
+
+    /// <summary>当前后端有没有值域（没有就连锚点都不显示）。</summary>
+    public bool HasFacet => ActiveFacet is not null;
+
+    public string FacetGlyph => ActiveFacet?.Glyph ?? "\uE8EC";
+
+    /// <summary>锚点上显示的名字（"标签"）。</summary>
+    public string FacetLabel => ActiveFacet?.DisplayName ?? string.Empty;
+
+    /// <summary>展开面板的开关。</summary>
+    [ObservableProperty]
+    bool _isFacetOpen;
+
+    /// <summary>候选值正在取（后端要读一次标签库）。</summary>
+    [ObservableProperty]
+    bool _isFacetLoading;
+
+    /// <summary>多选口径：false = 任一命中（默认），true = 全部命中。</summary>
+    [ObservableProperty]
+    bool _facetMatchAll;
+
+    public string FacetMatchAllLabel => FacetMatchAll ? "全部命中" : "任一命中";
+
+    public string FacetMatchAllTip => FacetMatchAll
+        ? "多个值「全部命中」—— 后端按 AND 下推（Zotero：重复 tag=）"
+        : "多个值「任一命中」—— 后端按 OR 下推（Zotero：tag=A || B）";
+
+    partial void OnFacetMatchAllChanged(bool value)
+    {
+        OnPropertyChanged(nameof(FacetMatchAllLabel));
+        OnPropertyChanged(nameof(FacetMatchAllTip));
+        OnPropertyChanged(nameof(FacetAnchorTip));
+        // 只有一个值时两种口径结果相同 —— 不为它白跑一次后端
+        if (_selectedFacetValues.Count > 1) _ = RunAsync();
+    }
+
+    /// <summary>已选的值（顶部只回显这些）。</summary>
+    public ObservableCollection<FacetChip> SelectedFacets { get; } = [];
+
+    /// <summary>展开面板里的全部候选值。</summary>
+    public ObservableCollection<FacetCandidate> FacetCandidates { get; } = [];
+
+    readonly List<string> _selectedFacetValues = [];
+
+    /// <summary>读候选值失败的原因（要如实显示，不能装作"这个库里没有标签"）。</summary>
+    [ObservableProperty]
+    string? _facetError;
+
+    public bool HasFacetSelection => _selectedFacetValues.Count > 0;
+
+    /// <summary>已选值的原样列表（自检用）。</summary>
+    public IReadOnlyList<string> SelectedFacetValues => _selectedFacetValues;
+
+    /// <summary>锚点提示：必须说清"候选值是从后端拿的"，否则用户会以为是程序内置的固定列表。</summary>
+    public string FacetAnchorTip
+    {
+        get
+        {
+            if (ActiveFacet is not { } f) return string.Empty;
+            var source = TemplateProviderId is { Length: > 0 } pid ? SnapshotMapper.Pretty(pid) : "当前来源";
+            if (_selectedFacetValues.Count == 0)
+                return $"{f.DisplayName}：候选值来自{source}自己" + (f.Tip is null ? "" : "\n" + f.Tip);
+            return $"已选 {_selectedFacetValues.Count} 个{f.DisplayName}（{FacetMatchAllLabel}）\n来源：{source}\n" +
+                   string.Join("、", _selectedFacetValues);
+        }
+    }
+
+    /// <summary>状态条上的一句话口径（null = 没在按值域筛）。</summary>
+    public string? FacetSummary => _selectedFacetValues.Count == 0 || ActiveFacet is not { } f
+        ? null
+        : $"{f.DisplayName}：{string.Join("、", _selectedFacetValues)}（{FacetMatchAllLabel}）";
+
+    /// <summary>最近一次真正带上的值域选择（诊断用：一眼看出它有没有进查询）。</summary>
+    public string? LastFacetLabel { get; private set; }
+
+    [RelayCommand]
+    void ToggleFacetValue(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return;
+        if (!_selectedFacetValues.Remove(value)) _selectedFacetValues.Add(value);
+        SyncFacetSelection();
+        _ = RunAsync();
+    }
+
+    [RelayCommand]
+    void RemoveFacetValue(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || !_selectedFacetValues.Remove(value)) return;
+        SyncFacetSelection();
+        _ = RunAsync();
+    }
+
+    [RelayCommand]
+    void ClearFacetValues()
+    {
+        if (_selectedFacetValues.Count == 0) return;
+        _selectedFacetValues.Clear();
+        SyncFacetSelection();
+        _ = RunAsync();
+    }
+
+    [RelayCommand]
+    void ToggleFacetMatchAll() => FacetMatchAll = !FacetMatchAll;
+
+    /// <summary>已选值的真相在 <see cref="_selectedFacetValues"/>，这里把它同步给三处视图：
+    /// 顶部回显、展开面板的勾选状态、以及几个依赖它的提示文本。</summary>
+    void SyncFacetSelection()
+    {
+        SelectedFacets.Clear();
+        foreach (var v in _selectedFacetValues) SelectedFacets.Add(new FacetChip(v));
+
+        foreach (var c in FacetCandidates)
+            c.IsChecked = _selectedFacetValues.Contains(c.Value);
+
+        OnPropertyChanged(nameof(HasFacetSelection));
+        OnPropertyChanged(nameof(FacetAnchorTip));
+        OnPropertyChanged(nameof(FacetSummary));
+    }
+
+    /// <summary>后端变了（或值域形状变了）：清掉选择与候选 —— 上一个后端的标签在另一个后端毫无意义。
+    /// 这与"换来源时标签选择归零"是同一条理由。</summary>
+    void ResetFacetSelection()
+    {
+        _selectedFacetValues.Clear();
+        FacetCandidates.Clear();
+        FacetError = null;
+        IsFacetOpen = false;
+        SyncFacetSelection();
+        NotifyFacetShape();
+    }
+
+    void NotifyFacetShape()
+    {
+        // ⚠ 每一个都要通知到。漏一个的症状是"图标对、文字空" ——
+        // 绑定只求值一次，换来源时没收到通知的属性会一直留着上一个后端的值
+        // （实测踩到：FacetLabel 漏了通知，锚点上只剩一个图标，看不出是什么筛选器）。
+        OnPropertyChanged(nameof(ActiveFacet));
+        OnPropertyChanged(nameof(HasFacet));
+        OnPropertyChanged(nameof(FacetGlyph));
+        OnPropertyChanged(nameof(FacetLabel));
+        OnPropertyChanged(nameof(FacetAnchorTip));
+        OnPropertyChanged(nameof(FacetSummary));
+    }
+
+    partial void OnIsFacetOpenChanged(bool value)
+    {
+        // 展开时才去读候选值：它要真跑一趟后端，而多数查询根本不碰值域筛选器
+        if (value) _ = LoadFacetCandidatesAsync();
+    }
+
+    /// <summary>读候选值。失败要显示原因 —— 空面板 + 无解释是最糟的结果（分不清"没标签"和"读不到"）。</summary>
+    public async Task LoadFacetCandidatesAsync()
+    {
+        if (ActiveFacet is not { } facet || ActiveFacetProvider() is not { } provider) return;
+
+        IsFacetLoading = true;
+        FacetError = null;
+        try
+        {
+            var values = await provider.GetFacetValuesAsync(facet.Id, Context ?? SearchContext.Global(),
+                                                            CancellationToken.None);
+            // 读的过程中用户又换了后端 —— 这批候选已经不属于当前上下文了
+            if (!ReferenceEquals(provider, ActiveFacetProvider())) return;
+
+            if (!values.Ok)
+            {
+                FacetCandidates.Clear();
+                FacetError = values.Error;
+                return;
+            }
+
+            FacetCandidates.Clear();
+            foreach (var v in values.Values)
+                FacetCandidates.Add(new FacetCandidate(v.Value, v.Count) { IsChecked = _selectedFacetValues.Contains(v.Value) });
+        }
+        catch (Exception ex)
+        {
+            FacetError = ex.Message;
+            _log?.Warn("ui", $"读取值域 {facet.Id} 失败：{ex.Message}", ex);
+        }
+        finally
+        {
+            IsFacetLoading = false;
+        }
+    }
 
     /// <summary>宿主加载完 filters.json 后注入（改文件后重启程序生效）。</summary>
     public void SetFilterCatalog(FilterCatalog catalog)
@@ -996,9 +1214,12 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         // 自定义筛选器（filters.json）→ 查询过滤器，并重建 ProviderText。
         // 只改 Filters 不重建 ProviderText 的话，后端拿到的还是没过滤的查询串：
         // 它会把整库结果搬过来再由 Core 后过滤（几十万条 vs 几十条）。
+        var merged = q.Filters;
+        var filtersChanged = false;
+
         if (CurrentFilter is { } filter)
         {
-            var merged = q.Filters with
+            merged = merged with
             {
                 Extensions = filter.Extensions,
                 Kinds = filter.Kinds.Select(k => Enum.Parse<ResultKind>(k, ignoreCase: true)).ToList(),
@@ -1007,8 +1228,24 @@ public sealed partial class SearchSessionViewModel : ObservableObject
                 // （实测踩到：Zotero 的条目类型筛选器就是这么"点了没用"的）。
                 Subtypes = filter.Subtypes,
             };
-            q = UniSearch.Core.Parsing.QueryParser.WithFilters(q, merged);
+            filtersChanged = true;
         }
+
+        // 值域筛选（标签）：候选值来自后端，由后端自己下推。
+        // 只有"当前后端声明了值域、且真的选了值"时才带上 —— 带上它，调度器就会把
+        // 不懂这个域的后端跳过（见 ProviderSelector 的 NotApplicableToFacetFilter）。
+        LastFacetLabel = null;
+        if (ActiveFacet is { } facet && _selectedFacetValues.Count > 0)
+        {
+            merged = merged with
+            {
+                Facets = [new FacetSelection(facet.Id, [.. _selectedFacetValues], FacetMatchAll)],
+            };
+            filtersChanged = true;
+            LastFacetLabel = $"{facet.Id}={(FacetMatchAll ? "全部" : "任一")}:{string.Join("|", _selectedFacetValues)}";
+        }
+
+        if (filtersChanged) q = UniSearch.Core.Parsing.QueryParser.WithFilters(q, merged);
 
         // ForcedCategory 只对<b>内置分类</b>有意义：自定义筛选器 id 不是分类 id，
         // 交给 Core 硬过滤会一条都剩不下（筛选器已经用 ext:/kind: 表达了同一件事）。
@@ -1023,8 +1260,10 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             ProviderScope = EffectiveProviderScope,
         };
 
-        // 只有"没加任何筛选器"的这次查询才够格刷新标签栏基准（见 _tabGroups 的注释）
-        _tabBaselineEligible = builtinCategory is null && CurrentFilter is null;
+        // 只有"没加任何筛选器"的这次查询才够格刷新标签栏基准（见 _tabGroups 的注释）。
+        // 值域选择也算"加了筛选器"：否则一勾标签，分类标签栏就会按筛过的结果重建 —— 与
+        // "点分类不该把其他标签删掉"是同一个坑。
+        _tabBaselineEligible = builtinCategory is null && CurrentFilter is null && _selectedFacetValues.Count == 0;
 
         IsBusy = true;
         SyntaxNotice = q.SyntaxNotice;

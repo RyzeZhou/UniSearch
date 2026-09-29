@@ -16,6 +16,9 @@ public sealed record ZoteroRequest
     public string? ItemType => Find("itemType");
     public int? Limit => int.TryParse(Find("limit"), out var n) ? n : null;
 
+    /// <summary>全部 <c>tag=</c> 值（AND 时会有多个）。</summary>
+    public IReadOnlyList<string> Tags => Query.Where(kv => kv.Key == "tag").Select(kv => kv.Value).ToList();
+
     string? Find(string key)
     {
         foreach (var kv in Query)
@@ -62,12 +65,16 @@ public static class ZoteroQueryTranslator
         var itemType = MapItemType(query.Filters.Kinds, query.Filters.Subtypes, notes);
         if (itemType is not null) q.Add(new("itemType", itemType));
 
+        // 值域筛选（标签）下推。返回多对（AND 时一个值一对），所以是 AddRange 不是 Add。
+        foreach (var tag in BuildTagFilters(query.Filters.Facets, notes))
+            q.Add(new("tag", tag));
+
         q.Add(new("limit", limit.ToString()));
         q.Add(new("format", "json"));
 
         // 没有 q 也没有 itemType 也没有集合 = 什么都没筛，那就是"列出整个库"。
         // 这不算错（用户可能就想看看库里有什么），但不能假装这是一次搜索。
-        if (text.Length == 0 && itemType is null && collectionKey is null)
+        if (text.Length == 0 && itemType is null && collectionKey is null && q.All(p => p.Key != "tag"))
             notes.Add("没有可下推的条件，将列出整个文库");
 
         NoteUnsupported(query, notes);
@@ -131,6 +138,47 @@ public static class ZoteroQueryTranslator
         // 其它 Kind（文件/图片/视频…）对 Zotero 没有意义 —— 调度阶段本该已经跳过它。
         notes.Add("该后端只产出文献条目，类型条件已在前端过滤");
         return null;
+    }
+
+    /// <summary>
+    /// 标签下推（值域 <c>tag</c>）。返回<b>若干对</b> <c>tag=</c>，不是拼接好的一个串 ——
+    /// 因为两种口径在 URL 上长得完全不同：
+    /// <list type="bullet">
+    /// <item><description><b>任一命中（OR）</b>：<c>tag=A || B</c> —— 一个参数值里放布尔式；</description></item>
+    /// <item><description><b>全部命中（AND）</b>：<c>tag=A&amp;tag=B</c> —— 重复参数名（实测：蛋白设计 + 小分子 = 0 条，
+    /// 而 <c>||</c> 形式 = 5 条，两种口径确实分得开）。</description></item>
+    /// </list>
+    /// <para>
+    /// <b>值原样送，绝不加引号</b> —— 实测 <c>tag="蛋白设计"</c> 返回 <b>0 条</b>：
+    /// 本地 API 不把引号当"精确短语"解析，而是当成标签名的一部分去字面匹配。
+    /// 官方文档里那套 <c>tag="exact phrase"</c> 的写法在本地端点上是无效的。
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<string> BuildTagFilters(IReadOnlyList<FacetSelection> facets, List<string> notes)
+    {
+        var sel = facets.FirstOrDefault(f => string.Equals(f.FacetId, ZoteroProvider.TagFacetId, StringComparison.OrdinalIgnoreCase));
+        if (sel is null || sel.Values.Count == 0) return [];
+
+        var values = new List<string>(sel.Values.Count);
+        foreach (var raw in sel.Values)
+        {
+            var v = raw.Trim();
+            if (v.Length == 0) continue;
+            // 标签名里含 || 就没法表达了：Zotero 用它当 OR 分隔符，送过去只会被拆成两个不存在的标签。
+            // 与其给一个"看起来筛了其实筛了别的"的结果，不如丢掉并说清楚。
+            if (v.Contains("||", StringComparison.Ordinal))
+            {
+                notes.Add($"标签「{v}」含 ||（Zotero 的 OR 分隔符），无法下推，已忽略该标签");
+                continue;
+            }
+            values.Add(v);
+        }
+
+        if (values.Count == 0) return [];
+        if (values.Count == 1) return [values[0]];
+
+        // AND 时逐个重复参数；OR 时一个参数值里用 || 连接（值本身不编码分隔符，自己拼）。
+        return sel.MatchAll ? values : [string.Join(" || ", values)];
     }
 
     /// <summary>

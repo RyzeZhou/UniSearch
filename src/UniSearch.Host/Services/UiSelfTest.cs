@@ -696,6 +696,121 @@ public static class UiSelfTest
     /// 所以先等请求计数往前走，再等它落回空闲。
     /// </para>
     /// </summary>
+    /// <summary>
+    /// 值域筛选器自检（Zotero 标签）。
+    /// <para>
+    /// <b>为什么断言的是后端报的总数、不是行数</b>：行数受每个后端的结果预算限制（Zotero 60 条），
+    /// 而标签计数是<b>服务端口径</b>。用行数断言的话，"筛对了"和"没筛、只是结果恰好少"分不开 ——
+    /// 而把这两件事分清，正是这个功能存在的全部意义。
+    /// </para>
+    /// <para>
+    /// 标签名与计数全部<b>现场从后端取</b>，不写死在断言里：用户的库随时在变，
+    /// 写死一个「蛋白设计=3」的断言，第二天就会变成一条与功能无关的假红。
+    /// </para>
+    /// </summary>
+    public static async Task RunFacetsAsync(SearchSessionViewModel vm, IUniSearchLog log)
+    {
+        log.Info("selftest", "=== 值域筛选器自检（Zotero 标签）===");
+        var bad = new List<string>();
+
+        void Check(bool ok, string what)
+        {
+            log.Info("selftest", $"  {(ok ? "✓" : "✗")} {what}");
+            if (!ok) bad.Add(what);
+        }
+
+        static int? ZoteroTotal(SearchSessionViewModel v) =>
+            v.Outcomes.FirstOrDefault(o => o.ProviderId == "zotero")?.TotalAvailable;
+
+        // ① 没有值域的后端：锚点整块不该出现（否则点开是空的）
+        vm.Input = "";
+        vm.ActiveSourceId = "everything";
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+        Check(!vm.HasFacet, "Everything 下没有值域锚点");
+
+        // ② 切到 Zotero → 值域出现，且换来源必须把已选值清掉
+        vm.ActiveSourceId = "zotero";
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+        Check(vm.HasFacet, "Zotero 下值域锚点出现");
+        Check(vm.FacetLabel == "标签", $"值域名是「标签」（实际「{vm.FacetLabel}」）");
+        Check(vm.SelectedFacetValues.Count == 0, "换来源后已选值归零");
+
+        // ③ 展开 → 候选值真从后端来
+        vm.IsFacetOpen = true;
+        for (var i = 0; i < 60 && vm.IsFacetLoading; i++) await Task.Delay(50).ConfigureAwait(true);
+
+        var candidates = vm.FacetCandidates.ToList();
+        Check(candidates.Count > 0, $"展开后拿到候选标签（{candidates.Count} 个）");
+        Check(vm.FacetError is null, $"读取候选值没有报错（{vm.FacetError ?? "-"}）");
+        log.Info("selftest", $"  候选：{string.Join(" | ", candidates.Take(20).Select(c => c.Display))}");
+
+        var baseline = ZoteroTotal(vm);
+        log.Info("selftest", $"  无标签时 Zotero 总命中 {baseline?.ToString() ?? "?"}");
+
+        // 取计数最小的两个标签：OR 与 AND 的差别最明显，也最不容易撞上结果预算
+        var picks = candidates.Where(c => c.Count > 0).OrderBy(c => c.Count).ThenBy(c => c.Value, StringComparer.Ordinal)
+                              .Take(2).ToList();
+        if (picks.Count < 2)
+        {
+            log.Warn("selftest", "标签不足两个，跳过筛选行为断言");
+            FinishFacets(log, bad);
+            return;
+        }
+
+        // ④ 单选一个标签：总命中必须**精确等于**该标签的条目数 —— 这是"真下推了"的硬证据
+        vm.ToggleFacetValueCommand.Execute(picks[0].Value);
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+        var one = ZoteroTotal(vm);
+        log.Info("selftest", $"  选「{picks[0].Value}」-> 总命中 {one}（标签自称 {picks[0].Count}）" +
+                             $" 查询={vm.LastFacetLabel ?? "-"}");
+        Check(one == picks[0].Count, $"单选「{picks[0].Value}」的总命中等于它自己的计数");
+        Check(vm.LastFacetLabel is { Length: > 0 }, "查询里带上了值域选择");
+        Check(vm.SelectedFacetValues.Count == 1, "顶部回显一个已选值");
+
+        // ⑤ 再选一个 → 默认「任一命中」，总数落在 [最大, 之和] 区间
+        vm.ToggleFacetValueCommand.Execute(picks[1].Value);
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+        var or = ZoteroTotal(vm);
+        var lo = Math.Max(picks[0].Count, picks[1].Count);
+        var hi = picks[0].Count + picks[1].Count;
+        log.Info("selftest", $"  再选「{picks[1].Value}」（任一命中）-> 总命中 {or}（应在 {lo}..{hi}）" +
+                             $" 查询={vm.LastFacetLabel ?? "-"}");
+        Check(or >= lo && or <= hi, "「任一命中」的总命中落在两个标签计数之间");
+
+        // ⑥ 切成「全部命中」→ 只能更少（多以 0 条收场，这正是默认给 OR 的原因）
+        vm.ToggleFacetMatchAllCommand.Execute(null);
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+        var and = ZoteroTotal(vm);
+        log.Info("selftest", $"  切「全部命中」-> 总命中 {and}（应 ≤ {or}）查询={vm.LastFacetLabel ?? "-"}");
+        Check(and is not null && or is not null && and <= or, "「全部命中」的总命中不多于「任一命中」");
+
+        // ⑦ 清空 → 回到基线
+        vm.ClearFacetValuesCommand.Execute(null);
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+        Check(vm.SelectedFacetValues.Count == 0, "清空后没有已选值");
+        Check(vm.LastFacetLabel is null, "清空后查询里不再带值域");
+        Check(ZoteroTotal(vm) == baseline, $"清空后回到基线总命中 {baseline?.ToString() ?? "?"}");
+
+        // ⑧ 切回没有值域的后端：锚点消失、选择清掉
+        vm.ActiveSourceId = "everything";
+        await WaitForIdleAsync(vm).ConfigureAwait(true);
+        Check(!vm.HasFacet, "切回 Everything 后值域锚点消失");
+        Check(vm.SelectedFacetValues.Count == 0, "切回 Everything 后已选值仍为空");
+
+        FinishFacets(log, bad);
+    }
+
+    static void FinishFacets(IUniSearchLog log, List<string> bad)
+    {
+        if (bad.Count == 0)
+        {
+            log.Info("selftest", "值域筛选器自检：全部通过 ✓");
+            return;
+        }
+        log.Warn("selftest", $"值域筛选器自检失败 {bad.Count} 项：");
+        foreach (var b in bad) log.Warn("selftest", "  ✗ " + b);
+    }
+
     static async Task SelectTabAndWaitAsync(SearchSessionViewModel vm, string tabId)
     {
         var before = vm.SearchRequestCount;

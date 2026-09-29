@@ -215,6 +215,146 @@
                         <TextBlock Text="{Binding TemplateLabel}"/>
                     </Button>
 
+                    <!-- 值域筛选器（标签）：候选值来自后端自己，可能有上百个，所以**不摊在标签栏上**。
+                         这里只有一枚带小三角的锚点，点开弹面板；标签栏上只回显已选的那几个。 -->
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,4,0"
+                                Visibility="{Binding HasFacet, Converter={StaticResource BoolToVis}}">
+
+                        <ToggleButton x:Name="FacetAnchor" Style="{x:Null}"
+                                      Margin="0,0,2,1" Padding="6,1" Cursor="Hand" MinWidth="0"
+                                      IsChecked="{Binding IsFacetOpen, Mode=TwoWay}"
+                                      ToolTip="{Binding FacetAnchorTip}"
+                                      AutomationProperties.AutomationId="FacetAnchor"
+                                      AutomationProperties.Name="{Binding FacetLabel}"
+                                      FontFamily="{StaticResource Font.Text}"
+                                      FontSize="{StaticResource Font.Size.FilterTab}"
+                                      Foreground="{StaticResource Brush.Text.Primary}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="Fa" CornerRadius="{StaticResource Radius.Default}"
+                                            Background="{StaticResource Brush.Chip.Neutral}"
+                                            Padding="{TemplateBinding Padding}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding FacetGlyph}" FontFamily="{StaticResource Glyph.Font}"
+                                                       FontSize="11" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource Brush.Text.Secondary}"/>
+                                            <TextBlock Text="{Binding FacetLabel}" Margin="4,0,0,0"
+                                                       VerticalAlignment="Center"/>
+                                            <!-- 小三角：告诉用户"这里点得开"，而不是一枚按下去没反应的死标签 -->
+                                            <TextBlock Text="&#xE70D;" FontFamily="{StaticResource Glyph.Font}"
+                                                       FontSize="8" Margin="4,1,0,0" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource Brush.Text.Secondary}"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Fa" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="Fa" Property="Background" Value="{StaticResource Brush.Subtle}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+
+                        <!-- 已选回显：顶部"只显示已经选择的标签"，每个带 × 可单独摘掉 -->
+                        <ItemsControl ItemsSource="{Binding SelectedFacets}"
+                                      ItemTemplate="{StaticResource FacetChipTemplate}"
+                                      VerticalAlignment="Center" Focusable="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+
+                        <Popup x:Name="FacetPopup" PlacementTarget="{Binding ElementName=FacetAnchor}"
+                               Placement="Bottom" IsOpen="{Binding IsFacetOpen, Mode=TwoWay}"
+                               StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+                            <!-- Popup 的内容不在主可视树上，往上找不到 Window；用 PlacementTarget
+                                 把锚点的 DataContext（= 同一个 VM）取回来，后面的绑定才有着落。 -->
+                            <Border DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=Popup}}"
+                                    Background="{StaticResource Brush.Surface.Card}"
+                                    BorderBrush="{StaticResource Brush.Stroke.Default}" BorderThickness="1"
+                                    CornerRadius="{StaticResource Radius.Default}"
+                                    Padding="4" MinWidth="220" MaxWidth="360">
+                                <DockPanel>
+                                    <!-- 底部：多值口径 + 清空。口径必须在看得见的地方 —— 
+                                         "两个标签一条都没有"多半不是筛坏了，而是口径是「全部命中」。 -->
+                                    <Grid DockPanel.Dock="Bottom" Margin="2,4,2,1">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ToggleButton Grid.Column="0" Style="{x:Null}" HorizontalAlignment="Left"
+                                                      Padding="5,1" Cursor="Hand" MinWidth="0"
+                                                      IsChecked="{Binding FacetMatchAll, Mode=OneWay}"
+                                                      Command="{Binding ToggleFacetMatchAllCommand}"
+                                                      ToolTip="{Binding FacetMatchAllTip}"
+                                                      FontFamily="{StaticResource Font.Text}"
+                                                      FontSize="{StaticResource Font.Size.Chip}"
+                                                      Foreground="{StaticResource Brush.Text.Primary}">
+                                            <ToggleButton.Template>
+                                                <ControlTemplate TargetType="ToggleButton">
+                                                    <Border x:Name="Mb" CornerRadius="{StaticResource Radius.Chip}"
+                                                            Background="{StaticResource Brush.Chip.Neutral}"
+                                                            Padding="{TemplateBinding Padding}">
+                                                        <TextBlock Text="{Binding FacetMatchAllLabel}"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Mb" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </ToggleButton.Template>
+                                        </ToggleButton>
+                                        <Button Grid.Column="1" Style="{x:Null}" Padding="5,1" Cursor="Hand" MinWidth="0"
+                                                Command="{Binding ClearFacetValuesCommand}"
+                                                FontFamily="{StaticResource Font.Text}"
+                                                FontSize="{StaticResource Font.Size.Chip}"
+                                                Foreground="{StaticResource Brush.Text.Secondary}"
+                                                ToolTip="清空已选">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="Cb" CornerRadius="{StaticResource Radius.Chip}"
+                                                            Background="Transparent" Padding="{TemplateBinding Padding}">
+                                                        <TextBlock Text="清空"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Cb" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </Grid>
+
+                                    <!-- 读候选值失败要如实说，不要留一个空白面板（分不清"没标签"和"读不到"） -->
+                                    <TextBlock DockPanel.Dock="Top" Margin="6,4,6,4" TextWrapping="Wrap"
+                                               Text="{Binding FacetError}"
+                                               FontFamily="{StaticResource Font.Text}"
+                                               FontSize="{StaticResource Font.Size.Chip}"
+                                               Foreground="{StaticResource Brush.Chip.Danger}"
+                                               Visibility="{Binding FacetError, Converter={StaticResource BoolToVis}}"/>
+                                    <TextBlock DockPanel.Dock="Top" Margin="6,4,6,4"
+                                               Text="正在读取候选值…"
+                                               FontFamily="{StaticResource Font.Text}"
+                                               FontSize="{StaticResource Font.Size.Chip}"
+                                               Foreground="{StaticResource Brush.Text.Secondary}"
+                                               Visibility="{Binding IsFacetLoading, Converter={StaticResource BoolToVis}}"/>
+
+                                    <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled">
+                                        <ItemsControl ItemsSource="{Binding FacetCandidates}"
+                                                      ItemTemplate="{StaticResource FacetCandidateTemplate}"
+                                                      Focusable="False"/>
+                                    </ScrollViewer>
+                                </DockPanel>
+                            </Border>
+                        </Popup>
+                    </StackPanel>
+
                     <ItemsControl ItemsSource="{Binding Tabs}"
                                   ItemTemplate="{StaticResource CategoryTabTemplate}"
                                   Focusable="False">

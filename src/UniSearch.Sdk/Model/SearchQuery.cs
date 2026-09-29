@@ -93,6 +93,35 @@ public sealed record QueryFilters
     /// </summary>
     public IReadOnlyList<string> Subtypes { get; init; } = [];
 
+    /// <summary>
+    /// <b>值域</b>筛选（候选值来自后端自己，见 <c>IFacetProvider</c>）。空 = 不限。
+    /// <para>
+    /// 与 <see cref="Extensions"/> / <see cref="Kinds"/> 的区别：那几个的值域由<b>宿主</b>定义
+    /// （扩展名表、类型枚举），这里由<b>后端</b>定义 —— Zotero 有哪些标签只有它自己知道。
+    /// </para>
+    /// <para>
+    /// 能下推的后端（Zotero <c>tag=</c>）会把它翻进查询串，此时结果的"共 N 条"是服务端口径；
+    /// 不能下推的后端不该被调度（ProviderSelector 会跳过），刻意不做前端近似过滤 ——
+    /// 值域候选来自后端、结果却在别处近似匹配，两边对不上的时候用户只会看到莫名其妙的空列表。
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<FacetSelection> Facets { get; init; } = [];
+
+    /// <summary>
+    /// 有没有<b>真的选了值</b>的值域。空壳（域在、值空）不算 —— UI 允许留一个没勾任何值的空壳
+    /// （用户刚把最后一个勾去掉的那一刻），那不该被当成"要筛"。
+    /// <para>判断"要不要为值域改变调度"一律用这个，不要直接看 <see cref="Facets"/>.Count。</para>
+    /// </summary>
+    public bool HasFacetSelection
+    {
+        get
+        {
+            foreach (var f in Facets)
+                if (f.Values.Count > 0) return true;
+            return false;
+        }
+    }
+
     /// <summary>用户用引号锁定的短语。</summary>
     public string? Phrase { get; init; }
 
@@ -112,7 +141,19 @@ public sealed record QueryFilters
     public string? ExplicitDirectory { get; init; }
 
     public bool IsEmpty =>
-        Extensions.Count == 0 && Kinds.Count == 0 && Subtypes.Count == 0 && Phrase is null && !FoldersOnly &&
+        Extensions.Count == 0 && Kinds.Count == 0 && Subtypes.Count == 0 && !HasFacetSelection &&
+        Phrase is null && !FoldersOnly &&
         !RegexRequested && MinSizeBytes is null && MaxSizeBytes is null && ModifiedAfter is null &&
         ExplicitDirectory is null;
 }
+
+/// <summary>
+/// 值域筛选的一条选择。例如 <c>("tag", ["蛋白设计", "小分子"], MatchAll: false)</c>。
+/// </summary>
+/// <param name="FacetId">值域 id，由 <c>IFacetProvider.Facets</c> 声明（后端私有词汇，如 <c>tag</c>）。</param>
+/// <param name="Values">选中的值。空集合 = 这一域没有选择（与"不出现"等价，UI 可以留着空壳）。</param>
+/// <param name="MatchAll">
+/// 多值时是"全部满足"（AND）还是"任一满足"（OR）。默认 OR —— 真按 AND 走的时候，
+/// 两个冷门标签的交集常常是 0 条，用户会以为筛选坏了（实测 Zotero「蛋白设计」+「小分子」= 0）。
+/// </param>
+public sealed record FacetSelection(string FacetId, IReadOnlyList<string> Values, bool MatchAll = false);

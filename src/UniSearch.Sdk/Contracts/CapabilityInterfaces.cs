@@ -94,3 +94,49 @@ public interface IDirectoryListProvider
 {
     IAsyncEnumerable<SearchBatch> ListAsync(string directory, long requestId, CancellationToken ct);
 }
+
+/// <summary>
+/// 提供<b>值域筛选器</b>：候选值来自后端自己，而不是宿主写死的表。
+/// <para>
+/// 与 <see cref="IActionProvider"/> 那类能力不同，这个接口服务的是<b>过滤条</b>：
+/// 宿主把 <see cref="Facets"/> 画成一枚可展开的筛选器（候选值多到摊不平，所以是"点开才展开"），
+/// 展开时调 <see cref="GetFacetValuesAsync"/> 取全部候选值；用户勾选的结果进
+/// <see cref="SearchQuery.Filters"/> 的 <c>Facets</c>，由 Provider 自己翻译成后端查询参数。
+/// </para>
+/// <para>
+/// <b>为什么候选值必须来自后端</b>：Zotero 的标签库是用户随时在改的，宿主这边没有任何
+/// 同步来源。写死一份列表，第一天就对不上了。
+/// </para>
+/// <para>
+/// 声明了这个接口，就意味着<b>必须能把 Facets 下推进自己的查询</b>（宿主会据此调度：
+/// 不支持的后端在带 Facets 的查询里会被直接跳过，见 ProviderSelector）。
+/// </para>
+/// </summary>
+public interface IFacetProvider
+{
+    /// <summary>该后端支持的值域。空 = 没有（那就别实现这个接口）。</summary>
+    IReadOnlyList<FacetDescriptor> Facets { get; }
+
+    /// <summary>
+    /// 取某一域的全部候选值。失败要如实回 <see cref="FacetValues.Error"/>，
+    /// 不要回空列表假装"这个库里没有标签"。
+    /// </summary>
+    ValueTask<FacetValues> GetFacetValuesAsync(string facetId, SearchContext context, CancellationToken ct);
+}
+
+/// <param name="Id">值域 id（后端私有词汇，如 <c>tag</c>）。</param>
+/// <param name="DisplayName">筛选器上显示的名字。</param>
+/// <param name="Glyph">Segoe Fluent 字形。</param>
+/// <param name="MatchAllDefault">多选默认是不是"全部满足"。默认 false（任一满足）。</param>
+/// <param name="Tip">提示文本：说清这个域的语义与多值口径。</param>
+public sealed record FacetDescriptor(string Id, string DisplayName, string Glyph,
+                                     bool MatchAllDefault = false, string? Tip = null);
+
+public sealed record FacetValues(string FacetId, IReadOnlyList<FacetValue> Values, string? Error = null)
+{
+    public static FacetValues Failed(string facetId, string error) => new(facetId, [], error);
+    public bool Ok => Error is null;
+}
+
+/// <param name="Count">该值下的条目数（后端给的，不是已返回子集的口径）。</param>
+public sealed record FacetValue(string Value, long Count);

@@ -401,6 +401,23 @@ public partial class App : Application
             return;
         }
 
+        // --selftest-facets：值域筛选器（Zotero 标签）—— 展开取候选值 / 单选精确命中 /
+        // 任一 vs 全部 / 清空回基线 / 换来源归零。断言用的是后端报的总数，不是行数
+        // （行数受结果预算限制，分不出"筛对了"和"没筛但恰好少"）。
+        if (e.Args.Contains("--selftest-facets", StringComparer.OrdinalIgnoreCase))
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+            timer.Tick += async (_, _) =>
+            {
+                timer.Stop();
+                try { await UiSelfTest.RunFacetsAsync(vm, log); }
+                catch (Exception ex) { log.Error("selftest", "值域筛选器自检失败", ex); }
+                Quit();
+            };
+            timer.Start();
+            return;
+        }
+
         // --selftest-keys：直接调快捷键分发函数，核对 Ctrl+J / Ctrl+1..9 / Ctrl+0 真的接上了。
         // 配合 --query 用（没有结果就没有分类标签，测不出东西）。
         if (e.Args.Contains("--selftest-keys", StringComparer.OrdinalIgnoreCase))        {

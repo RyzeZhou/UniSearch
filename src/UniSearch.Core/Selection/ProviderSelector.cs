@@ -10,7 +10,7 @@ public sealed record ProviderEntry(ISearchProvider Provider, ProviderDescriptor 
     public string? DisabledReason { get; set; }
 }
 
-public enum SkipReason { NotEnabled, NoGlobalScope, CannotScopeToDirectory, CapabilityMismatch, HealthUnavailable, NotApplicableToKindFilter, NotInScope }
+public enum SkipReason { NotEnabled, NoGlobalScope, CannotScopeToDirectory, CapabilityMismatch, HealthUnavailable, NotApplicableToKindFilter, NotApplicableToFacetFilter, NotInScope }
 
 public sealed record ProviderSelection(IReadOnlyList<ProviderEntry> Selected, IReadOnlyList<(ProviderEntry Entry, SkipReason Reason)> Skipped);
 
@@ -64,6 +64,17 @@ public static class ProviderSelector
             if (q.Filters.Extensions.Count > 0 && !e.Descriptor.Capabilities.Has(ProviderCapability.SupportsKindFilter))
             {
                 // 不剔除，只降级：Core 会做后过滤。这里保留它。
+            }
+
+            // 值域过滤（标签这类"候选值来自后端"的条件）：只有能把它下推进自己查询的后端才该跑。
+            // 刻意**不做前端近似过滤** —— 候选值是从 Zotero 拿的，拿它去匹配 Everything 的文件行
+            // 只会得到空列表；用户看到的是"选了标签就什么都没有"，而真相是这个后端根本不懂标签。
+            // 判据是"真的选了值"（HasFacetSelection），空壳不算 —— 否则把最后一个勾去掉的瞬间
+            // 就会少一个后端，而用户什么都没改。
+            if (q.Filters.HasFacetSelection && e.Provider is not IFacetProvider)
+            {
+                skipped.Add((e, SkipReason.NotApplicableToFacetFilter));
+                continue;
             }
 
             picked.Add(e);

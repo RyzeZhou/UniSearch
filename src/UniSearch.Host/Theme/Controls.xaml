@@ -365,4 +365,97 @@
         </RadioButton>
     </DataTemplate>
 
+    <!-- ── 值域筛选器（候选值来自后端，见 IFacetProvider）────────────────
+
+         与上面的分类标签刻意长得不一样：分类标签是"已经摊在那里的选项"，而值域筛选器是
+         "点开才展开的入口"。视觉上要能一眼分开，否则用户会以为标签栏上突然多了一堆选项。
+         已选值用同色 chip 回显（带 × 可摘掉），点击展开用一枚小三角提示。 -->
+
+    <!-- 标签栏上回显的一枚已选值 -->
+    <DataTemplate x:Key="FacetChipTemplate" DataType="{x:Type vm:FacetChip}">
+        <Border Margin="0,0,2,1" Padding="5,1" CornerRadius="{StaticResource Radius.Chip}"
+                Background="{StaticResource Brush.Chip.Accent}">
+            <StackPanel Orientation="Horizontal">
+                <!-- AutomationProperties 挂在这块 TextBlock 上而不是外层 Border 上：
+                     只有带 AutomationPeer 的元素才会进 UIA 树，Border 没有 peer，
+                     挂在它上面的标识在自动化里根本查不到（验证脚本踩到过）。 -->
+                <TextBlock Text="{Binding Value}" VerticalAlignment="Center"
+                           AutomationProperties.AutomationId="FacetChip"
+                           AutomationProperties.Name="{Binding Value}"
+                           FontFamily="{StaticResource Font.Text}"
+                           FontSize="{StaticResource Font.Size.FilterTab}"
+                           Foreground="{StaticResource Brush.Text.OnAccent}"/>
+                <Button Style="{x:Null}" Margin="4,0,0,0" Padding="0" Cursor="Hand" MinWidth="0"
+                        Background="Transparent" BorderThickness="0" Focusable="False"
+                        ToolTip="去掉这个标签"
+                        Command="{Binding DataContext.RemoveFacetValueCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                        CommandParameter="{Binding Value}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Cx" CornerRadius="2" Padding="1,0" Background="Transparent">
+                                <TextBlock Text="&#xE711;" FontFamily="{StaticResource Glyph.Font}"
+                                           FontSize="9" VerticalAlignment="Center"
+                                           Foreground="{StaticResource Brush.Text.OnAccent}"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Cx" Property="Opacity" Value="0.6"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </StackPanel>
+        </Border>
+    </DataTemplate>
+
+    <!-- 展开面板里的一行候选值。整行是一枚按钮：不必精确点中左边那个小方块；
+         命令从 ItemsControl 的 DataContext（= 搜索会话 VM）取 —— 它在 Popup 里，
+         往上找不到 Window，所以不能用 AncestorType=Window 那一套。 -->
+    <DataTemplate x:Key="FacetCandidateTemplate" DataType="{x:Type vm:FacetCandidate}">
+        <Button Style="{x:Null}" HorizontalContentAlignment="Stretch" Cursor="Hand"
+                Command="{Binding DataContext.ToggleFacetValueCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                CommandParameter="{Binding Value}"
+                AutomationProperties.AutomationId="FacetValue"
+                AutomationProperties.Name="{Binding Display}"
+                ToolTip="{Binding Value}">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Row" Background="Transparent" CornerRadius="3" Padding="6,3">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Margin="0,0,6,0" VerticalAlignment="Center"
+                                       FontFamily="{StaticResource Glyph.Font}" FontSize="11">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="&#xE739;"/>
+                                        <Setter Property="Foreground" Value="{StaticResource Brush.Text.Tertiary}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsChecked}" Value="True">
+                                                <Setter Property="Text" Value="&#xE73E;"/>
+                                                <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       FontFamily="{StaticResource Font.Text}"
+                                       FontSize="{StaticResource Font.Size.FilterTab}"
+                                       Foreground="{StaticResource Brush.Text.Primary}"/>
+                        </DockPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsChecked}" Value="True">
+                            <Setter TargetName="Row" Property="Background" Value="{StaticResource Brush.Subtle}"/>
+                        </DataTrigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Row" Property="Background" Value="{StaticResource Brush.Subtle.Hover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
+    </DataTemplate>
+
 </ResourceDictionary>
