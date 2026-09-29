@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Providers.Anytxt"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Providers.Zotero", "src\UniSearch.Providers.Zotero\UniSearch.Providers.Zotero.csproj", "{D677681F-7966-4A21-948D-D23E42952B68}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniSearch.Providers.Siyuan", "src\UniSearch.Providers.Siyuan\UniSearch.Providers.Siyuan.csproj", "{16C209B1-D2FC-4E67-BE48-A637BE8DDFF9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -58,6 +60,10 @@ Global
 		{D677681F-7966-4A21-948D-D23E42952B68}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D677681F-7966-4A21-948D-D23E42952B68}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D677681F-7966-4A21-948D-D23E42952B68}.Release|Any CPU.Build.0 = Release|Any CPU
+		{16C209B1-D2FC-4E67-BE48-A637BE8DDFF9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{16C209B1-D2FC-4E67-BE48-A637BE8DDFF9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{16C209B1-D2FC-4E67-BE48-A637BE8DDFF9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{16C209B1-D2FC-4E67-BE48-A637BE8DDFF9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{EA67358F-E786-4602-8ABE-8FF302F5834C} = {049CB965-62A0-44A3-B211-BCD0134FE838}
@@ -67,5 +73,6 @@ Global
 		{CEC70A90-130F-4DEC-8832-9E7A514548DA} = {049CB965-62A0-44A3-B211-BCD0134FE838}
 		{1E7FBB6B-AC43-4AF5-9A61-2627F4BB7280} = {049CB965-62A0-44A3-B211-BCD0134FE838}
 		{D677681F-7966-4A21-948D-D23E42952B68} = {049CB965-62A0-44A3-B211-BCD0134FE838}
+		{16C209B1-D2FC-4E67-BE48-A637BE8DDFF9} = {049CB965-62A0-44A3-B211-BCD0134FE838}
 	EndGlobalSection
 EndGlobal
