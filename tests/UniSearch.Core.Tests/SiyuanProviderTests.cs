@@ -272,7 +272,8 @@ public class SiyuanProviderTests
         Assert.Equal("siyuan://blocks/20251017165116-4g4wjxt", r.Uri);
         // 跨机部署时磁盘上没有这个 .sy 文件 —— 填了 Path 只会让打开/预览指向不存在的文件
         Assert.Null(r.Path);
-        Assert.True(r.DisablePreview);
+        // 预览不再缺席：无路径结果由宿主问 IPreviewProvider，本 Provider 用 exportMdContent 供内容
+        Assert.False(r.DisablePreview);
     }
 
     [Fact]

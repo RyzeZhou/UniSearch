@@ -1693,6 +1693,97 @@ UniSearch 在 VM 上），而交付文档的实测是在**宿主机本机**做�
 
 ---
 
+## 2026-09-30 第 17 轮（上轮四项遗留清零：跨机预览 / siyuan:// 动作 / F2 热重载 / 片段二段式）
+
+### 本轮目标
+
+把第 16 轮"未完成"清单里的四项一次做完。开工前先核查了代码状态：`dotnet test` 263/263、
+`--selftest-siyuan` 七项全过（打真服务器 192.168.200.1:6806）、任务板无新单。
+另踩到一个会话级坑：**上个会话遗留的实例还在跑，单实例机制让新启动全部静默退出**
+（exit=0、无日志），自检"跑了没反应"先查进程再查别的。
+
+### 状态总览
+
+| 事项 | 状态 | 验证方式 |
+|---|---|---|
+| 思源跨机预览（`exportMdContent` → 预览面板） | ✅ 第一个 Provider 预览 | 单测 + `--selftest-siyuan` ⑧ + `--selftest-tabs` 实选行 |
+| `siyuan://` 跨机动作（复制链接 + 剪贴板能力） | ✅ | `IProcessLauncher.CopyToClipboard`（UI 级点按待人手确认） |
+| F2 筛选器热重载（文件监视 + 坏文件拒绝） | ✅ | 单测 + `--selftest-filters` ⑦a-d + 实机改文件实测 |
+| AnyTXT 片段二段式 | ✅ | 单测 + `--selftest-anytxt` ⑥ |
+| Broker 多批记账（按 FusionKey 去重） | ✅ | 新单测（两批重发不翻倍） |
+| 全量 | ✅ 274/274 | `dotnet test` |
+
+### 已完成并验证
+
+**1. `IPreviewProvider` 从"定义了没人用"变成真链路**
+
+Sdk 里早就有 `IPreviewProvider`（`PreviewContent`/`PreviewRequest` 都在），但没有任何 Provider
+实现、宿主的 `QueuePreview` 也不问 —— 无路径结果一律"文件不存在"（对思源的块这是撒谎）。
+本轮把它接通：`QueuePreview` 对无路径结果先问 Provider，`PreviewContent` 映射到宿主预览面板
+（Text/Markdown/Fields → 文本模板，标题进 Detail）。思源实现用 `exportMdContent`：
+实测「蛋白组学作图」导出 6030 字，UI 实选行 3977/594/275 字不等。Markdown 按源码显示，
+与磁盘 .md 文件同一条文本预览路 —— 不自研渲染器的口径不变。
+
+**2. siyuan:// 跨机：不给协议注册，给"复制链接"**
+
+在 VM 上注册 siyuan:// 要么指向不存在的程序、要么得先解决 Web 跨机授权（上轮已实测要授权码），
+都是机器级改动或未验证的路。本轮的解法：新增"复制 siyuan:// 链接"动作（始终可用），
+配 `IProcessLauncher.CopyToClipboard`（默认接口方法返回 false —— 宿主没实现时如实报失败）。
+预览本身让"跨机阅读"不再依赖跳转，复制链接覆盖"确实要去宿主机打开"的场景。
+
+**3. F2 热重载：判定器放 Core，监视器放宿主**
+
+`FilterCatalog.Load` 对坏文件**不抛异常**，只把问题记进 `Problems` 并跳过 —— 直接换新目录会让
+"文件写坏"静默变成"筛选器变少/变空"。因此拆成两层：
+- `FilterCatalogReloader`（Core，可单测）：回答"新目录该不该换"。判据 = **配置里存在、却没进
+  `Sources` 的文件 = 解析失败 → 整体拒绝**，保留旧目录；重载后一个筛选器不剩也拒绝。
+- `FilterFileWatcher`（宿主）：监视两份文件的**所在目录**（编辑器"改名替换"触发 Renamed，
+  盯文件会漏），Changed/Created/Renamed/Deleted 全接，400ms 防抖，落 UI 线程换目录并重跑查询。
+
+为此改了 `Sources` 的语义：**解析成功才算"读到的来源"**（原来 `sources.Add` 在解析之前）。
+被拒绝时状态条给出"filters.json 未生效：<原因>"—— 不允许静默。
+
+**4. AnyTXT 二段式：研究文档的方案是对的，我自己改坏了**
+
+第一批出行不带 `IsLast` → 首屏 Top 12 行逐个 `getFragment` 补片段（`*<<*…*>>*` → `[[…]]`）→
+第二批 emit，FusionStore 按 FusionKey 原地升级 Snippet。**我第一版用了 getFragmentAll（多段），
+实测它返回裸文本、没有高亮标记，且不认 limit 参数（回显强制成 8）** —— 已写回研究文档 §1.4，
+改回单段 getFragment（研究文档原方案写的就是它，教训是"别擅自升级文档验证过的方案"）。
+
+**5. Broker 多批记账**
+
+`ConsumeAsync` 原本按批次累加 `returned`/`kept`，两批会把"N 条"翻倍。改为按 FusionKey 记账
+（raw 与 kept 各一套 HashSet），BatchEvent 仍转发全部（FusionStore 靠它做原地升级）。
+
+### 新踩的坑
+
+1. **单实例 + 遗留进程 = 新启动静默退出**：exit=0、零日志，极易误判"自检没输出"。
+   跑自检/构建前先 `Get-Process UniSearch`（上轮的 MSB3027 是同一件事的构建侧表现）。
+2. **getFragmentAll 无标记、无视 limit**（见上）—— 研究文档 §1.4 已补实测记录。
+3. **自检断言不能假设语料干净**：片段断言第一版写了"不含 `*<<*`"，而测试语料恰好包含
+   我自己写的协议文档（正文里就有字面 `*<<*`）→ 假红。断言只验"已转换出 `[[`"。
+4. **`FilterCatalog.Sources` 原来含解析失败的文件**：`sources.Add` 在 try 之前 —— 语义修正后
+   热重载判据才成立。动"看起来只是诊断信息"的字段前先想清楚谁拿它当依据。
+
+### 未完成 / 下次从这里继续
+
+- **copylink 动作的 UI 级点按**没做（剪贴板实现是标准 API + STA 封送，未人工点过）——
+  右键思源结果点一次"复制 siyuan:// 链接"即验。
+- `siyuan://` 协议注册 / Web 块定位 URL 仍是"要做需先拍板"（涉及机器级改动或未验证的授权流）。
+- 第 15 轮基线里的 A1（默认列宽重算）、B2（拖列头重排）、B4（后端图标）、B5（托盘增强）未动。
+
+### 验证手段变化
+
+- `dotnet test`：263 → **274**（热重载判定 4 / Broker 两批记账 1 / 片段解析 4 / 思源预览截断 2）。
+- `--selftest-siyuan` 加 **⑧ 跨机预览**：拿真实命中行真的导一次 Markdown。
+- `--selftest-anytxt` 加 **⑥ 片段二段**：`{n}/{N} 行带片段`，且换算出 `[[`。
+- `--selftest-filters` 加 **⑦ 热重载**：⑦a 写入测试筛选器→Accepted；⑦b 写坏→RejectedFileBroken
+  且旧目录保留；⑦c 换目录后标签栏重建；⑦d finally 恢复现场（备份/删除按原状）。
+- 实机监视验证：改文件 → 日志"筛选器已热重载：11 个"；写坏 → "热重载被拒绝…"；删除 → 回 10 个。
+- `--selftest-tabs` 实选行日志出现"无路径结果 siyuan 走 Provider 预览 -> Text N 字"。
+
+---
+
 ```markdown
 ## YYYY-MM-DD 第 N 轮（目标 goal-xxxx）
 

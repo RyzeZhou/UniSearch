@@ -175,7 +175,6 @@ public sealed class FilterCatalog
         foreach (var path in jsonPaths)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) continue;
-            sources.Add(path);
 
             FilterFile? file;
             try
@@ -187,6 +186,10 @@ public sealed class FilterCatalog
                 problems.Add($"{Path.GetFileName(path)} 解析失败：{ex.Message}");
                 continue;
             }
+
+            // 成功解析才算"读到的来源"—— Sources 的语义是"实际生效的文件"，
+            // 坏文件从 Problems 里看（热重载判定也据此区分"坏文件"与"没配置"）
+            sources.Add(path);
 
             if (file is null) continue;
 

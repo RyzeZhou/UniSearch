@@ -1079,10 +1079,10 @@ public sealed partial class SearchSessionViewModel : ObservableObject
 
         var svc = Preview;
         var src = row.Source;
+        var broker = _broker;
         _ = Task.Run(async () =>
         {
-            var result = await svc.LoadAsync(src.Path, src.Extension, src.IsFolder, mine.Token)
-                                    .ConfigureAwait(false);
+            var result = await LoadPreviewAsync(broker, svc, src, mine.Token).ConfigureAwait(false);
             if (mine.Token.IsCancellationRequested) return;
 
             // 回到 UI 线程写（ImageSource 已在服务里 Freeze，可跨线程）
@@ -1092,6 +1092,57 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             });
         }, mine.Token);
     }
+
+    /// <summary>
+    /// 预览内容取数：本地文件走 <see cref="PreviewService"/> 主管线；
+    /// <b>没有路径的结果（思源的块、在线条目）先问 Provider 自己</b> ——
+    /// <see cref="IPreviewProvider"/> 是 Provider 供预览的口子，思源的跨机 Markdown 预览从这走。
+    /// </summary>
+    static async Task<UniSearch.Host.Services.PreviewResult> LoadPreviewAsync(
+        SearchBroker broker, PreviewService svc, SearchResult src, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(src.Path))
+            return await svc.LoadAsync(src.Path, src.Extension, src.IsFolder, ct).ConfigureAwait(false);
+
+        var entry = broker.Providers.FirstOrDefault(x =>
+            string.Equals(x.Descriptor.Id, src.ProviderId, StringComparison.OrdinalIgnoreCase));
+        if (entry?.Provider is IPreviewProvider provider)
+        {
+            try
+            {
+                var content = await provider.GetPreviewAsync(
+                    src, new PreviewRequest(0, 0, 0, WantsThumbnails: false), ct).ConfigureAwait(false);
+                PreviewService.Trace?.Invoke(
+                    $"无路径结果 {src.ProviderId} 走 Provider 预览 -> " +
+                    (content is null ? "null（拒答）" : $"{content.Kind} {(content.Text?.Length ?? 0)} 字"));
+                if (content is not null) return MapProviderPreview(content);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { /* Provider 已把失败写进 host.log；这里照旧降级，不崩 */ }
+        }
+
+        // 对"天生没有路径"的结果，"文件不存在"是在撒谎 —— 如实说没有可预览的
+        return new UniSearch.Host.Services.PreviewResult(
+            UniSearch.Host.Services.PreviewKind.Unavailable, null, null, "没有可用的预览", src.Uri);
+    }
+
+    /// <summary>Sdk 的 <c>PreviewContent</c> → 宿主预览面板。文本类（含 Markdown 源码）走同一个文本模板。</summary>
+    static UniSearch.Host.Services.PreviewResult MapProviderPreview(PreviewContent content) => content.Kind switch
+    {
+        UniSearch.Sdk.Contracts.PreviewKind.Text or UniSearch.Sdk.Contracts.PreviewKind.Markdown
+            or UniSearch.Sdk.Contracts.PreviewKind.Html
+            => new UniSearch.Host.Services.PreviewResult(
+                UniSearch.Host.Services.PreviewKind.Text, null, content.Text, null, content.Title),
+        UniSearch.Sdk.Contracts.PreviewKind.Fields when content.Fields.Count > 0
+            => new UniSearch.Host.Services.PreviewResult(
+                UniSearch.Host.Services.PreviewKind.Text, null,
+                string.Join(Environment.NewLine, content.Fields.Select(f =>
+                    string.IsNullOrEmpty(f.Value) ? f.Label : $"{f.Label}: {f.Value}")),
+                null, content.Title),
+        _ => new UniSearch.Host.Services.PreviewResult(
+                UniSearch.Host.Services.PreviewKind.Unavailable, null, null,
+                $"该后端不支持「{content.Kind}」形态的预览"),
+    };
 
     [RelayCommand]
     public void TogglePreview()

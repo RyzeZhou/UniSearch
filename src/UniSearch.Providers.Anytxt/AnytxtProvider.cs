@@ -145,6 +145,7 @@ public sealed class AnytxtProvider : ISearchProvider, IGlobalScopeProvider, IFil
         var total = 0;
         var anySuccess = false;
         string? lastError = null;
+        string? pattern = null;
         var notes = new List<string>();
         _driveBreakdown.Clear();
 
@@ -161,6 +162,7 @@ public sealed class AnytxtProvider : ISearchProvider, IGlobalScopeProvider, IFil
                     if (!notes.Contains(n)) notes.Add(n);
 
                 if (translation.Request is not { } request) continue;
+                pattern ??= request.Pattern;
 
                 var (rows, totalForDir, error) = await FetchAsync(request, ct).ConfigureAwait(false);
                 if (error is not null) { lastError = error; continue; }
@@ -193,8 +195,104 @@ public sealed class AnytxtProvider : ISearchProvider, IGlobalScopeProvider, IFil
         // 截到预算内（跨盘合并后可能超）
         var results = collected.Count > limit ? collected.GetRange(0, limit) : collected;
 
-        yield return SearchBatch.Of(ProviderId, query.RequestId, results, total, isLast: true);
+        // 二段式（研究文档 §1.2 的既定方案）：先出行保证快，片段另补。
+        // 第一批刻意不带 IsLast —— Broker 见 IsLast 就收票，第二批就送不出去了。
+        yield return SearchBatch.Of(ProviderId, query.RequestId, results, total, isLast: false);
+
+        // 第二段：给首屏 Top N 行补命中片段（getFragment 逐行问，写在 Snippet 里）。
+        var enriched = await FetchSnippetsAsync(results, pattern, ct).ConfigureAwait(false);
+        if (enriched.Count > 0)
+        {
+            _runtime?.Log.Debug(ProviderId, $"片段二段：{enriched.Count} 行补上命中片段");
+            yield return SearchBatch.Of(ProviderId, query.RequestId, enriched, total, isLast: true);
+        }
+        else
+        {
+            yield return SearchBatch.Of(ProviderId, query.RequestId, [], total, isLast: true);
+        }
     }
+
+    /// <summary>片段二段最多覆盖多少行。全量 = ResultBudget 次逐行 RPC，只有首屏配得上这个成本。</summary>
+    const int SnippetRows = 12;
+
+    /// <summary>
+    /// 逐行 <c>anytxt.v1.getFragment</c> 取命中片段。片段是锦上添花：
+    /// <b>任何一行失败都跳过</b>，取消/超时也只保留已取到的 ——
+    /// 结果本身已经在第一批送达了，不能反过来被修饰步骤拖进"超时"。
+    /// <para>
+    /// ⚠ 必须用 <b>getFragment</b>（单段）而不是 getFragmentAll（多段）：
+    /// 实测只有前者会包 <c>*&lt;&lt;*…*&gt;&gt;*</c> 高亮标记，后者的段落是裸文本，
+    /// 且不认 <c>limit</c> 参数（回显强制成 8）。多段虽多，没有标记等于白取。
+    /// </para>
+    /// </summary>
+    async Task<List<SearchResult>> FetchSnippetsAsync(List<SearchResult> rows, string? pattern, CancellationToken ct)
+    {
+        if (rows.Count == 0 || string.IsNullOrWhiteSpace(pattern)) return [];
+
+        var enriched = new List<SearchResult>(Math.Min(rows.Count, SnippetRows));
+        try
+        {
+            foreach (var row in rows.Take(SnippetRows))
+            {
+                // fid 是回查正文的凭据（MapRow 里顺手存进 Payload）；没有它就没处问片段
+                if (row.Payload is not string { Length: > 0 } fid) continue;
+
+                await _gate.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    var call = await _client.CallAsync("anytxt.v1.getFragment",
+                        new Dictionary<string, object?> { ["fid"] = fid, ["pattern"] = pattern },
+                        ct).ConfigureAwait(false);
+                    if (!call.Ok) continue;
+
+                    var snippet = ParseFragment(call.Output);
+                    if (snippet is not null) enriched.Add(row with { Snippet = snippet });
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 到点/用户取消：发已拿到的，剩下的行保持无片段
+        }
+        catch (Exception ex)
+        {
+            _runtime?.Log.Debug(ProviderId, $"片段二段失败（这些行保持无片段）：{ex.Message}");
+        }
+        return enriched;
+    }
+
+    /// <summary>
+    /// 把 getFragment(All) 的 <c>output</c> 解析成统一 Snippet 记法：
+    /// 高亮标记 <c>*&lt;&lt;*…*&gt;&gt;*</c> → <c>[[…]]</c>（<see cref="SearchResult.Snippet"/> 的约定记法）。
+    /// getFragment 的 text 是单段字符串、getFragmentAll 的是数组 —— 两种都收，多段用「 … 」接。
+    /// </summary>
+    internal static string? ParseFragment(JsonElement output)
+    {
+        if (output.ValueKind != JsonValueKind.Object || !output.TryGetProperty("text", out var t))
+            return null;
+
+        IEnumerable<string?> parts = t.ValueKind switch
+        {
+            JsonValueKind.Array => t.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() : null),
+            JsonValueKind.String => [t.GetString()],
+            _ => [],
+        };
+
+        var cleaned = parts.Where(p => !string.IsNullOrWhiteSpace(p))
+                           .Select(p => CapFragment(p!.Replace("*<<*", "[[", StringComparison.Ordinal)
+                                                     .Replace("*>>*", "]]", StringComparison.Ordinal).Trim()))
+                           .Where(p => p.Length > 0)
+                           .Take(3)
+                           .ToArray();
+        return cleaned.Length == 0 ? null : string.Join(" … ", cleaned);
+    }
+
+    /// <summary>单段片段的上限 —— 摘要是给人扫一眼的，不是给他读全文的。</summary>
+    internal static string CapFragment(string s, int max = 260) => s.Length <= max ? s : s[..max] + "…";
 
     /// <summary>
     /// 本次要问哪些目录。

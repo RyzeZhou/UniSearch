@@ -31,6 +31,9 @@ public partial class App : Application
     SearchBroker? _broker;
     SearchSessionViewModel? _vm;
     FilterCatalog? _filterCatalog;
+    FilterCatalogReloader? _filterReloader;
+    FilterFileWatcher? _filterWatcher;
+    HostLog? _log;
     MainWindow? _win;
     EverythingProvider? _everything;
     AnytxtProvider? _anytxt;
@@ -44,7 +47,7 @@ public partial class App : Application
 
         var dataDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UniSearch");
-        var log = new HostLog(Path.Combine(dataDir, "host.log"));
+        var log = _log = new HostLog(Path.Combine(dataDir, "host.log"));
 
         // ── 单实例守门（必须在注册热键/建托盘之前）──────────────
         // 第二个实例的全局热键注册必然失败、托盘会多一个图标、两份搜索状态各自为政，
@@ -133,9 +136,9 @@ public partial class App : Application
 
         // 筛选器定义：程序自带的模板（dist\filters.json）+ 用户自己的（%LOCALAPPDATA%\UniSearch\filters.json）。
         // 后者覆盖同 id 的前者 —— 用户改模板文件会被下次更新覆盖，这一点必须在文档里说清楚。
-        _filterCatalog = FilterCatalog.Load(
-            Path.Combine(AppContext.BaseDirectory, "filters.json"),
-            Path.Combine(dataDir, "filters.json"));
+        var builtinFiltersPath = Path.Combine(AppContext.BaseDirectory, "filters.json");
+        var userFiltersPath = Path.Combine(dataDir, "filters.json");
+        _filterCatalog = FilterCatalog.Load(builtinFiltersPath, userFiltersPath);
         vm.SetFilterCatalog(_filterCatalog);
         // 模板的钉住表与部署级默认要在目录之后注入：解析链得先有目录才谈得上"哪个模板"。
         // 钉住来自 settings.filterTemplates.<pid>；部署级默认来自 providers.<id>.options.filterTemplate
@@ -154,6 +157,12 @@ public partial class App : Application
                             $"来源=[{string.Join(", ", _filterCatalog.Sources.Select(Path.GetFileName))}]）");
         foreach (var problem in _filterCatalog.Problems)
             log.Warn("filters", problem);
+
+        // 热重载（遗留 C3 / F2）：监视两份 filters.json，保存即生效，不用重启程序。
+        // "该不该换上新目录"的判定在 FilterCatalogReloader（Core，可单测）——
+        // 文件写坏时保留旧目录并明确提示，绝不静默换上一份残缺的。
+        _filterReloader = new FilterCatalogReloader(builtinFiltersPath, userFiltersPath);
+        _filterWatcher = new FilterFileWatcher([builtinFiltersPath, userFiltersPath], ReloadFilters, log);
 
         // 预览链路的诊断接到 host.log：它为了"失败降级不崩"会吞异常，没有这条通道就查不出原因
         PreviewService.Trace = m => log.Info("preview", m);
@@ -850,6 +859,36 @@ public partial class App : Application
         return map;
     }
 
+    /// <summary>
+    /// filters.json 变了（<see cref="FilterFileWatcher"/> 防抖后的回调，在线程池上）：
+    /// 回 UI 线程重载并换目录。被拒绝时<b>保留旧目录</b>，但必须在状态条上说一声 ——
+    /// "保存了却没生效"如果一点动静都没有，用户只会以为程序坏了。
+    /// </summary>
+    void ReloadFilters()
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_vm is null || _filterReloader is null || _filterCatalog is null) return;
+
+            var result = _filterReloader.Reload(_filterCatalog);
+            switch (result.Outcome)
+            {
+                case FilterReloadOutcome.Accepted:
+                    _filterCatalog = result.Catalog;
+                    _vm.SetFilterCatalog(_filterCatalog);   // 内部会按新目录重跑当前查询
+                    _log?.Info("filters", $"筛选器已热重载：{_filterCatalog.All.Count} 个、模板 {_filterCatalog.Templates.Count} 个" +
+                                          $"（来源=[{string.Join(", ", _filterCatalog.Sources.Select(Path.GetFileName))}]）");
+                    _vm.ActionFeedback = $"筛选器已更新（{_filterCatalog.All.Count} 个）";
+                    break;
+                case FilterReloadOutcome.RejectedFileBroken:
+                case FilterReloadOutcome.RejectedEmpty:
+                    _log?.Warn("filters", $"热重载被拒绝，沿用上一版筛选器：{result.Reason}");
+                    _vm.ActionFeedback = $"filters.json 未生效：{result.Reason}";
+                    break;
+            }
+        });
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
         // 退出时同步等待落盘（阻塞在这里没问题：进程正要结束）
@@ -858,6 +897,7 @@ public partial class App : Application
         _shellMenu?.Dispose();   // 移除消息钩子并销毁隐藏窗口
         _hotkeys?.Dispose();     // 注销全局热键
         _tray?.Dispose();        // 摘掉托盘图标（不摘的话图标会残留在任务栏直到鼠标划过）
+        _filterWatcher?.Dispose(); // 停掉 filters.json 监视
         SingleInstance.Release();
         Services?.Dispose();
         base.OnExit(e);

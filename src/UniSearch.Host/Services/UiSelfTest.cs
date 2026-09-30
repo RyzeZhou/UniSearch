@@ -685,6 +685,64 @@ public static class UiSelfTest
             vm.SelectedTabId = CategoryIds.All;
             await WaitForIdleAsync(vm).ConfigureAwait(true);
         }
+
+        // ⑦ 热重载（F2 / 遗留 C3）：改用户 filters.json 保存即生效；写坏了要被拒绝并保留旧目录。
+        //    走的是与 App.ReloadFilters 相同的"判定器 → vm.SetFilterCatalog"路径（只差 400ms 防抖）。
+        //    动的是用户真实文件 —— 先备份，finally 里恢复；原本没有用户文件的话恢复成"没有"。
+        var builtinPath = Path.Combine(AppContext.BaseDirectory, "filters.json");
+        var userPath = cat.Sources.FirstOrDefault(s => !string.Equals(
+                            Path.GetFullPath(s), Path.GetFullPath(builtinPath), StringComparison.OrdinalIgnoreCase))
+                        ?? Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                            "UniSearch", "filters.json");
+        var backup = File.Exists(userPath) ? File.ReadAllText(userPath) : null;
+        const string probeFilterId = "selftest-hotreload";
+        try
+        {
+            var reloader = new FilterCatalogReloader(builtinPath, userPath);
+
+            // a) 写入一条带唯一 id 的测试筛选器 → 重载 Accepted → 目录里真的多了它
+            File.WriteAllText(userPath,
+                $$"""{ "version": 1, "filters": [ { "id": "{{probeFilterId}}", "name": "自检热重载", "extensions": ["zzz-probe-ext"] } ] }""");
+            var added = reloader.Reload(vm.Catalog);
+            var addedOk = added.Outcome == FilterReloadOutcome.Accepted
+                          && added.Catalog.Find(probeFilterId) is not null;
+            if (addedOk) vm.SetFilterCatalog(added.Catalog);
+            log.Info("selftest", $"⑦a 热重载新增「{probeFilterId}」-> {added.Outcome}，" +
+                                 $"目录里有它={vm.Catalog.Find(probeFilterId) is not null} -> {(addedOk ? "PASS" : "FAIL")}");
+
+            // b) 把文件写坏 → 拒绝换新，旧目录（含刚加的测试筛选器）原样保留
+            File.WriteAllText(userPath, "{ \"version\": 1, \"filters\": [ ");
+            var rejected = reloader.Reload(vm.Catalog);
+            var rejectedOk = rejected.Outcome == FilterReloadOutcome.RejectedFileBroken
+                             && vm.Catalog.Find(probeFilterId) is not null
+                             && ReferenceEquals(rejected.Catalog, vm.Catalog);
+            log.Info("selftest", $"⑦b 写坏文件 -> {rejected.Outcome}（{rejected.Reason}），" +
+                                 $"旧目录保留={ReferenceEquals(rejected.Catalog, vm.Catalog)} -> {(rejectedOk ? "PASS" : "FAIL")}");
+
+            // c) 与 UIA 的接点：SetFilterCatalog 会按新目录重跑查询，等一轮空闲，确认标签栏还能重建
+            if (addedOk)
+            {
+                await WaitForIdleAsync(vm).ConfigureAwait(true);
+                log.Info("selftest", $"⑦c 换目录后标签栏=[{string.Join(", ", vm.Tabs.Take(6).Select(t => t.Id))}…]（能重建即衔接正常）");
+            }
+        }
+        finally
+        {
+            // d) 恢复现场：原本有就写回，原本没有就删掉；再重载一次让目录回到测试前的样子
+            if (backup is null)
+            {
+                if (File.Exists(userPath)) File.Delete(userPath);
+            }
+            else
+            {
+                File.WriteAllText(userPath, backup);
+            }
+
+            var restore = new FilterCatalogReloader(builtinPath, userPath).Reload(vm.Catalog);
+            if (restore.Outcome == FilterReloadOutcome.Accepted) vm.SetFilterCatalog(restore.Catalog);
+            log.Info("selftest", $"⑦d 恢复现场 -> {restore.Outcome}，测试筛选器还在目录里={vm.Catalog.Find(probeFilterId) is not null}（期望 False）");
+        }
     }
 
     /// <summary>
@@ -1370,6 +1428,17 @@ public static class UiSelfTest
         ok &= nrows.Count == 0;
         log.Info("selftest", $"⑤ 不存在的词 -> 行={nrows.Count}（期望 0）-> {(nrows.Count == 0 ? "PASS" : "FAIL")}");
 
+        // ⑥ 片段二段式（getFragment 单段，实测只有它带高亮标记）：首屏行要补上命中片段，
+        //    且已换算成 [[…]] 记法。只断言"有片段且出了 [[ "—— 不能断言"不含 *<<"：
+        //    正文本身可能合法地含有这串字面量（本项目自己的研究文档就写着标记格式）。
+        var withSnippet = rows.Where(r => r.Snippet is { Length: > 0 }).ToList();
+        var snippetOk = rows.Count > 0 && withSnippet.Count > 0
+                        && withSnippet.All(r => r.Snippet!.Contains("[[", StringComparison.Ordinal));
+        ok &= snippetOk;
+        log.Info("selftest", $"⑥ 片段二段：{withSnippet.Count}/{rows.Count} 行带片段 -> {(snippetOk ? "PASS" : "FAIL")}");
+        foreach (var r in withSnippet.Take(2))
+            log.Info("selftest", $"     {System.IO.Path.GetFileName(r.Path)} => {r.Snippet}");
+
         log.Info("selftest", ok ? "AnyTXT 联调自检：全部通过 ✓" : "AnyTXT 联调自检：有失败 ✗");
     }
 
@@ -1379,16 +1448,19 @@ public static class UiSelfTest
         UniSearch.Sdk.Model.SearchQuery query,
         UniSearch.Sdk.Capabilities.SearchContext context)
     {
-        var rows = new List<UniSearch.Sdk.Model.SearchResult>();
+        // 按 FusionKey 收：片段二段式的第二批会重发已见过的行（补了 Snippet 的版本），
+        // 直接 AddRange 会把行数翻倍 —— 与 FusionStore 的"按键升级"同一口径，后批覆盖前批。
+        var byKey = new Dictionary<string, UniSearch.Sdk.Model.SearchResult>(StringComparer.Ordinal);
         var total = 0;
         var batches = 0;
         await foreach (var b in provider.SearchAsync(query, context, CancellationToken.None).ConfigureAwait(false))
         {
             batches++;
-            rows.AddRange(b.Results);
+            foreach (var r in b.Results)
+                byKey[r.FusionKey] = r;
             if (b.TotalAvailable is { } t) total = t;
         }
-        return (rows, total, batches);
+        return ([.. byKey.Values], total, batches);
     }
 
     /// <summary>
@@ -1649,6 +1721,31 @@ public static class UiSelfTest
             log.Info("selftest", $"⑦ 值域下推「{pick.Value}」（下推值 {pick.Pushdown}）-> 后端总数={boxTotal}" +
                                  $"（值域面板说 {pick.Count}），行={inBox.Count}，越界的行={inBox.Count - inBox.Count(r => r.Metadata.TryGetValue("boxId", out var b) && b == pick.Pushdown)}");
             log.Info("selftest", $"   断言：总数一致 且 每行都属于该笔记本 -> {(pushOk && rowsBelong ? "PASS" : "FAIL")}");
+        }
+
+        // ⑧ 跨机预览（IPreviewProvider 的现场验证）：拿真实结果真的导一次 Markdown。
+        //    挑的是上面检索命中的第一行 —— 自检要照着用户实际走的那条路写（选中 → 预览）。
+        if (hits.Count > 0)
+        {
+            UniSearch.Sdk.Contracts.PreviewContent? preview = null;
+            Exception? previewError = null;
+            try
+            {
+                preview = await provider.GetPreviewAsync(hits[0],
+                    new UniSearch.Sdk.Contracts.PreviewRequest(0, 0, 0, WantsThumbnails: false),
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) { previewError = ex; }
+
+            var previewOk = preview is { Kind: UniSearch.Sdk.Contracts.PreviewKind.Text
+                                           or UniSearch.Sdk.Contracts.PreviewKind.Markdown }
+                            && !string.IsNullOrEmpty(preview!.Text);
+            ok &= previewOk;
+            log.Info("selftest", $"⑧ 跨机预览「{hits[0].Title}」-> " +
+                                 (previewError is not null ? $"异常 {previewError.Message}"
+                                  : preview is null ? "null（Provider 拒答）"
+                                  : $"{preview.Kind} · {preview.Text!.Length} 字 · 标题={preview.Title}"));
+            log.Info("selftest", $"   断言：exportMdContent 出了正文 -> {(previewOk ? "PASS" : "FAIL")}");
         }
 
         log.Info("selftest", ok ? "思源联调自检：全部通过 ✓" : "思源联调自检：有失败 ✗");

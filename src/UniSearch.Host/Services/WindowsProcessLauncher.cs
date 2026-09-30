@@ -148,4 +148,31 @@ public sealed class WindowsProcessLauncher : IProcessLauncher
             WorkingDirectory = dir,
         }, _log, "打开终端");
     }
+
+    // ── 剪贴板 ─────────────────────────────────────────
+
+    /// <summary>
+    /// Provider 动作的"复制"落点。必须在 STA 线程上调（WPF 剪贴板的硬要求）——
+    /// 动作都从 UI 命令进来，天然满足；真从后台线程调时先封送，别让调用方操心。
+    /// </summary>
+    public bool CopyToClipboard(string text)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            if (System.Threading.Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
+                return System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    System.Windows.Clipboard.SetText(text);
+                    return true;
+                }) ?? false;
+            System.Windows.Clipboard.SetText(text);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("host", "写剪贴板失败", ex);
+            return false;
+        }
+    }
 }

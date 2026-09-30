@@ -92,8 +92,8 @@ public static class SiYuanItemMapper
             },
             Tags = BuildTags(row, notebook, isCode),
             ReadOnly = true,
-            // 没有本地文件可看：预览面板给不出东西，明说而不是让它空白着转圈
-            DisablePreview = true,
+            // 没有本地文件，但预览不缺席：宿主对无路径结果会问 IPreviewProvider，
+            // 本 Provider 用 exportMdContent 把块导成 Markdown 给预览面板（跨机可用）
             TotalAvailable = totalAvailable,
             CopyText = body.Length > 0 ? body : BlockUri(id),
         };

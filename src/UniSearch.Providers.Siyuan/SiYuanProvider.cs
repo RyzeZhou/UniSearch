@@ -24,7 +24,7 @@ namespace UniSearch.Providers.Siyuan;
 [UniSearchProvider("siyuan", "思源笔记", ApiVersion = 1, RequiredApp = "SiYuan",
     InstallHint = "https://b3log.org/siyuan/")]
 public sealed class SiYuanProvider : ISearchProvider, IGlobalScopeProvider, IActionProvider,
-                                    IExternalUiProvider, IFacetProvider
+                                    IExternalUiProvider, IFacetProvider, IPreviewProvider
 {
     public const string ProviderId = "siyuan";
 
@@ -326,6 +326,7 @@ public sealed class SiYuanProvider : ISearchProvider, IGlobalScopeProvider, IAct
         var actions = new List<ResultAction>();
         if (HasProtocol())
             actions.Add(new ResultAction { Id = "siyuan.open", Label = "在思源中打开", Glyph = "\uE8A7" });
+        actions.Add(new ResultAction { Id = "siyuan.copylink", Label = "复制 siyuan:// 链接", Glyph = "\uE8C8" });
         actions.Add(new ResultAction { Id = "siyuan.export", Label = "导出 Markdown", Glyph = "\uE8B7" });
         return actions;
     }
@@ -344,6 +345,17 @@ public sealed class SiYuanProvider : ISearchProvider, IGlobalScopeProvider, IAct
                 return ok
                     ? ActionResult.Ok()
                     : ActionResult.Fail($"唤不起思源（{uri}）—— 本机没有注册 siyuan:// 协议；跨机部署时用「导出 Markdown」");
+            }
+
+            case "siyuan.copylink":
+            {
+                // 跨机部署的"跳过去"就靠它：VM 上没有 siyuan:// 协议，把链接复制出来，
+                // 到装了思源的那台机器上（或远程桌面里）粘贴打开
+                var uri = SiYuanItemMapper.BlockUri(id);
+                var ok = _runtime?.Process.CopyToClipboard(uri) ?? false;
+                return ok
+                    ? ActionResult.Ok()
+                    : ActionResult.Fail("复制失败：宿主没有提供剪贴板能力");
             }
 
             case "siyuan.export":
@@ -376,6 +388,48 @@ public sealed class SiYuanProvider : ISearchProvider, IGlobalScopeProvider, IAct
     {
         var chars = id.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray();
         return chars.Length > 0 ? new string(chars) : "block";
+    }
+
+    // ───────────────────────── 预览（跨机 Markdown）─────────────────────────
+
+    /// <summary>
+    /// 块的预览内容：<c>exportMdContent</c> 把块导成带 frontmatter 的 Markdown，直接给文本面板。
+    /// <para>
+    /// <b>这是第一个跨机预览</b>：块没有本地文件，磁盘上根本没有可读的东西 —— 之前
+    /// <c>DisablePreview=true</c> 是"如实说没有"；现在改为把内容<b>取过来</b>。
+    /// Markdown 以源码形态显示，与磁盘上的 .md 文件走同一条"文本预览"路，不自研渲染器。
+    /// </para>
+    /// </summary>
+    public async ValueTask<PreviewContent?> GetPreviewAsync(SearchResult result, PreviewRequest request, CancellationToken ct)
+    {
+        if (result.ProviderId != ProviderId || result.ProviderItemId.Length == 0) return null;
+
+        var resp = await _client.ExportMdAsync(result.ProviderItemId, ct).ConfigureAwait(false);
+        if (!resp.Ok)
+        {
+            _runtime?.Log.Warn(ProviderId, $"预览失败：{resp.Error}{(resp.Hint is null ? "" : " · " + resp.Hint)}");
+            return null;
+        }
+
+        var hPath = Str(resp.Data, "hPath");
+        var content = Str(resp.Data, "content");
+        if (string.IsNullOrEmpty(content))
+        {
+            _runtime?.Log.Warn(ProviderId, "预览返回里没有 content（块可能已被删除）");
+            return null;
+        }
+
+        return PreviewContent.AsText(hPath ?? result.Title, TruncateForPreview(content!));
+    }
+
+    /// <summary>
+    /// 预览正文上限。Sdk 约定 ≤64KB；这里收敛到与本地文本预览同一量级 ——
+    /// 预览面板是小窗，一篇长笔记的后半截基本不会有人翻到。
+    /// </summary>
+    internal static string TruncateForPreview(string content, int maxChars = 6000)
+    {
+        if (content.Length <= maxChars) return content;
+        return content[..maxChars] + "\n\n…（已截断，动作里有「导出 Markdown」可看全文）";
     }
 
     // ───────────────────────── 跳到后端自己的界面 ─────────────────────────

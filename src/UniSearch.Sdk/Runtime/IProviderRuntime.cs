@@ -63,6 +63,11 @@ public interface IProcessLauncher
     bool RunAsAdmin(string path, string? arguments = null);
     /// <summary>在控制台/终端里打开所在目录（CmdPal 的 OpenInConsoleCommand 语义）。</summary>
     bool OpenInConsole(string path);
+    /// <summary>
+    /// 把文本放进系统剪贴板（Provider 的"复制 xx"类动作走这里）。
+    /// 默认 false：宿主没实现时动作要如实报失败，不能假装复制成功了。
+    /// </summary>
+    bool CopyToClipboard(string text) => false;
 }
 
 /// <summary>极简日志门面。SDK 不绑定第三方日志库；宿主可把它桥接到任何 sink。</summary>

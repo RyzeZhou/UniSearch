@@ -105,6 +105,9 @@
 
 // getFragmentAll —— text 是数组，count = 段数
 {"output":{"text":["...段1...","...段2..."],"count":2}}
+// ⚠ 实测（2026-09-30，Snippet 二段式踩到）：getFragmentAll 的段落是**裸文本、不带**高亮标记，
+//   且**不认 limit 参数**（传入 2，input 回显强制成 8、返回 8 段）。要标记就得用单段的
+//   getFragment —— UniSearch 的片段二段式因此选它。
 
 // getText —— 上限 1 MiB，被截断时带 truncated + originalBytes
 {"output":{"text":"...","truncated":true,"originalBytes":1234567}}

@@ -141,16 +141,23 @@ public sealed class SearchBroker : IDisposable
             && entry.Provider is IFileSystemScopedProvider { } scoped
             && scoped.TranslateScope(context) is not null;
 
+        // 按 FusionKey 记账：Provider 允许发多批（AnyTXT 的片段二段式，第二批会重发已见过的行），
+        // "返回/保留了多少行"只数第一次见到的键，否则两批会把"N 条"翻倍。
+        var rawSeen = new HashSet<string>(StringComparer.Ordinal);
+        var keptSeen = new HashSet<string>(StringComparer.Ordinal);
+
         try
         {
             await foreach (var batch in entry.Provider.SearchAsync(query, context, perProvider.Token).ConfigureAwait(false))
             {
                 if (batch.RequestId != 0 && batch.RequestId != query.RequestId) continue;   // Provider 忘了丢弃过期结果，这里兜底
                 perProvider.Token.ThrowIfCancellationRequested();
-                returned += batch.Results.Count;
+                foreach (var r in batch.Results)
+                    if (rawSeen.Add(r.FusionKey)) returned++;
                 total ??= batch.TotalAvailable;
                 var keptNow = Filter(batch.Results, query, context, entry, scopeNative);
-                kept += keptNow.Count;
+                foreach (var r in keptNow)
+                    if (keptSeen.Add(r.FusionKey)) kept++;
                 if (keptNow.Count > 0)
                     await writer.WriteAsync(new BatchEvent(batch.ProviderId, name, batch.RequestId, keptNow, batch.TotalAvailable), ct).ConfigureAwait(false);
                 if (batch.IsLast) break;
