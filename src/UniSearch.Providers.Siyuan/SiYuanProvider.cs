@@ -74,6 +74,8 @@ public sealed class SiYuanProvider : ISearchProvider, IGlobalScopeProvider, IAct
             ProviderCapability.ReturnsNotes | ProviderCapability.ReturnsDocuments |
             ProviderCapability.SearchesFileContent |
             ProviderCapability.SupportsGlobalScope | ProviderCapability.ProvidesActions,
+        // B4：左栏真图标。跨机部署时 VM 上多半没装 —— 兜底字形「笔记本」与它的结果行图标一致
+        Icon = new ProviderIcon("SiYuan", "SiYuan.exe", "", SiYuanLocator.FindExecutable()),
     };
 
     // ───────────────────────── 连接 ─────────────────────────
@@ -446,7 +448,11 @@ public sealed class SiYuanProvider : ISearchProvider, IGlobalScopeProvider, IAct
     {
         // 思源没有"传查询串唤起"的官方入口（不像 Everything 的 -s、AnyTXT 的 /s），
         // 所以只把窗口带起来，不假装能把查询送过去。
-        if (SiYuanLocator.FindExecutable() is { Length: > 0 } exe)
+        // exe 找不到时退到开始菜单快捷方式 / App Paths；都没有再试协议唤起。
+        var exe = SiYuanLocator.FindExecutable()
+                  ?? ShellAppLocator.FindStartMenuShortcut("SiYuan")
+                  ?? ShellAppLocator.FindViaAppPaths("SiYuan.exe");
+        if (exe is { Length: > 0 })
             return _runtime?.Process.OpenFile(exe) ?? false;
         return _runtime?.Process.StartUri("siyuan://") ?? false;
     }

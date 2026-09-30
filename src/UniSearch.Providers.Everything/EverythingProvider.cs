@@ -57,6 +57,10 @@ public sealed class EverythingProvider : ISearchProvider, IGlobalScopeProvider, 
             ProviderCapability.SearchesFileName | ProviderCapability.SupportsKindFilter |
             ProviderCapability.SupportsDirectoryScope | ProviderCapability.SupportsGlobalScope |
             ProviderCapability.ProvidesActions | ProviderCapability.SupportsListing,
+        // B4：左栏真图标。KnownPath 用自家 Locator（含"从正在运行进程反查"）尽力拿，
+        // 宿主还兜着开始菜单 / App Paths 两级 —— 便携安装照样能抽到真图标。
+        Icon = new ProviderIcon("Everything", "everything.exe", "\uE721",
+            EverythingLocator.FindExecutable()),
     };
 
     public ValueTask InitializeAsync(IProviderRuntime runtime, CancellationToken ct)
@@ -109,7 +113,7 @@ public sealed class EverythingProvider : ISearchProvider, IGlobalScopeProvider, 
 
     public string ExternalUiName => "Everything";
 
-    public bool CanOpenExternalUi => ResolveExe() is not null;
+    public bool CanOpenExternalUi => ResolveLaunchTarget() is not null;
 
     /// <summary>
     /// 把当前查询带到 Everything 自己的窗口。
@@ -117,13 +121,17 @@ public sealed class EverythingProvider : ISearchProvider, IGlobalScopeProvider, 
     /// 命令行开关是**实测**的（不是照文档猜的）：<c>everything.exe -search "&lt;q&gt;"</c>
     /// 会让已在运行的实例把标题变成 <c>&lt;q&gt; - Everything</c>，即真的执行了搜索，且复用同一进程。
     /// </para>
+    /// <para>
+    /// exe 找不到（便携安装又没在运行）时退到开始菜单快捷方式 / App Paths ——
+    /// ShellExecute 对 .lnk 会解引用目标并转交参数，<c>-search</c> 照样生效。
+    /// </para>
     /// </summary>
     public bool OpenExternalUi(string query)
     {
-        var exe = ResolveExe();
+        var exe = ResolveLaunchTarget();
         if (exe is null)
         {
-            _runtime?.Log.Warn(ProviderId, "找不到 Everything.exe，无法跳转到它的界面");
+            _runtime?.Log.Warn(ProviderId, "找不到 Everything 的入口（exe / 快捷方式 / App Paths 都没有），无法跳转");
             return false;
         }
 
@@ -147,6 +155,11 @@ public sealed class EverythingProvider : ISearchProvider, IGlobalScopeProvider, 
         }
         return _exePath;
     }
+
+    /// <summary>跳转入口 = exe，退而求其次 .lnk / App Paths（便携安装的最后系统事实）。</summary>
+    string? ResolveLaunchTarget() => ResolveExe()
+        ?? ShellAppLocator.FindStartMenuShortcut("Everything")
+        ?? ShellAppLocator.FindViaAppPaths("everything.exe");
 
     // ───────────────────────── 搜索 ─────────────────────────
 

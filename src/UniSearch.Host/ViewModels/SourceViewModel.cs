@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using System.Windows.Media;
 
 namespace UniSearch.Host.ViewModels;
 
@@ -13,11 +14,28 @@ namespace UniSearch.Host.ViewModels;
 public sealed partial class SourceViewModel : ObservableObject
 {
     public required string Id { get; init; }
+
     public required string DisplayName { get; init; }
+
+    /// <summary>
+    /// 字形兜底。初始 = 后端声明的 <c>ProviderIcon.FallbackGlyph</c>（各不相同）；
+    /// 软件图标解析出来后本项被 <see cref="Icon"/> 顶掉。
+    /// </summary>
     public required string Glyph { get; init; }
 
     /// <summary>副标题：能力自述或"为什么现在用不了"。</summary>
     public string? Description { get; init; }
+
+    /// <summary>
+    /// 后端软件的真图标（B4）。后台解析到位后回填（可跨线程，已 Freeze）；
+    /// null = 还在解析或没找到，模板显示 <see cref="Glyph"/>。
+    /// </summary>
+    [ObservableProperty]
+    System.Windows.Media.ImageSource? _icon;
+
+    public bool HasIcon => Icon is not null;
+
+    partial void OnIconChanged(System.Windows.Media.ImageSource? value) => OnPropertyChanged(nameof(HasIcon));
 
     /// <summary>当前是否被限定为唯一来源。</summary>
     [ObservableProperty]

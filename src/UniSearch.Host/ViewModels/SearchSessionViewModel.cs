@@ -975,7 +975,8 @@ public sealed partial class SearchSessionViewModel : ObservableObject
             {
                 Id = d.Id,
                 DisplayName = d.DisplayName,
-                Glyph = "\uE721",   // 搜索语义；后端自己的图标等 ProviderDescriptor 有图标字段再说
+                // B4：解析到真图标前先用后端声明的兜底字形（各不相同）；没声明 Icon 的退回通用放大镜
+                Glyph = d.Icon?.FallbackGlyph ?? "\uE721",
                 Description = d.Description,
                 IsAvailable = entry.Enabled,
                 IsDefaultAuto = AutoSearchProviders.Contains(d.Id, StringComparer.OrdinalIgnoreCase),
@@ -985,6 +986,29 @@ public sealed partial class SearchSessionViewModel : ObservableObject
         }
         OnPropertyChanged(nameof(Sources));
         OnPropertyChanged(nameof(SourceLabel));
+        LoadSourceIcons();
+    }
+
+    /// <summary>
+    /// B4：后台解析各后端的软件图标。开始菜单扫描可能几十毫秒，不能在 UI 线程干等；
+    /// 到位后回 UI 线程填充 <see cref="SourceViewModel.Icon"/>，模板自动从字形切到真图标。
+    /// 结果按 providerId 缓存在 <see cref="ProviderIconResolver"/> 里，重建 Sources 不重扫。
+    /// </summary>
+    void LoadSourceIcons()
+    {
+        foreach (var s in Sources)
+        {
+            var decl = _broker.Providers.FirstOrDefault(x => x.Descriptor.Id == s.Id)?.Descriptor.Icon;
+            if (decl is null) continue;
+
+            var source = s;   // 闭包捕获，别让 foreach 变量坑
+            _ = Task.Run(() => ProviderIconResolver.Resolve(s.Id, decl))
+                .ContinueWith(t =>
+                {
+                    if (t.Result is { } hit) source.Icon = hit.Icon;
+                }, CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion,
+                   TaskScheduler.FromCurrentSynchronizationContext());
+        }
     }
 
     /// <summary>把本次查询每个后端的处置写回来源栏（"12 条" / "未参与" / "失败"）。</summary>

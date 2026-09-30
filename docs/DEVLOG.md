@@ -1784,6 +1784,65 @@ Sdk 里早就有 `IPreviewProvider`（`PreviewContent`/`PreviewRequest` 都在�
 
 ---
 
+## 2026-09-30 第 18 轮（B4：左栏后端真图标 —— 线索探测，不写死路径）
+
+### 本轮目标
+
+用户拍板：左栏来源图标不用统一的放大镜字形，要**对应软件自己的图标**；并且明确了一条约束
+——**不能依赖确定的 exe 路径**："万一不是安装的方式，还能点击送达对应的软件吗"。
+
+### 状态总览
+
+| 事项 | 状态 | 验证方式 |
+|---|---|---|
+| `ProviderDescriptor.Icon`（声明线索而非路径） | ✅ | 单测 274 全过 |
+| `ShellAppLocator`（开始菜单 .lnk / App Paths 两级系统事实） | ✅ | 本机实测：AnyTXT 命中 .lnk、Zotero 命中 App Paths |
+| 宿主 `ProviderIconResolver`（KnownPath → 开始菜单 → App Paths → 字形） | ✅ | `--dump-render` 截图：三个真图标 + 思源字形兜底 |
+| 左栏大/紧凑两模板切换（Image + DataTrigger） | ✅ | 截图 + `--selftest-tabs` UIA 全过 |
+| 跳转入口增强（四个 Provider：exe → .lnk → App Paths） | ✅ | 编译 + 逻辑同图标链（.lnk 经 ShellExecute 转交参数） |
+
+### 关键取舍
+
+**1. 图标是"探测"不是"打包"**。软件图标是各家的美术资产，打进我们的分发产物有许可问题；
+运行时从用户自己装的软件上抽，与"结果行抽文件图标"是同一性质。声明的三个字段
+（`ShellKeyword` / `ExecutableName` / `FallbackGlyph`）都是**线索**，探测由宿主做。
+
+**2. 图标显示与"点击送达"是两条独立降级链，互不拖累**：
+- 图标：KnownPath → 开始菜单 .lnk → App Paths → **字形兜底（永远显示）**；
+- 跳转：exe → 开始菜单 .lnk → App Paths → **如实隐藏按钮（找不到就是找不到）**。
+便携版只要建过快捷方式，两边都活；连快捷方式都没有，图标还有字形兜底，跳转如实说不可用。
+
+**3. `KnownPath` 让 Provider 的"独门探测"参与进来**：EverythingLocator 能从**正在运行的 IPC
+进程反查路径**（宿主做不到，便携 Everything 的常态）——Provider 启动时算好塞进
+`Icon.KnownPath`，宿主最优先使用。
+
+**4. .lnk 可以直接用**：抽图标（SIIGBF_ICONONLY 自动解引用、无小箭头）和 ShellExecute 打开
+（参数转交目标进程，`-search` / `/s` 照样生效）都不需要先解引用成 exe——省掉一整套
+IShellLink P/Invoke。
+
+### 实测现场（本机四形态各一）
+
+| 后端 | 命中的探测级 | 结果 |
+|---|---|---|
+| Everything（便携 D:\Everything） | KnownPath（运行进程反查） | 橙色真图标 |
+| AnyTXT（开始菜单 `Anytxt Searcher 1.3.lnk`） | 开始菜单级 | 蓝色真图标 |
+| Zotero（App Paths 有 `zotero.exe` 键） | App Paths 级 | 红色 Z 图标 |
+| 思源（VM 上没装） | 全 miss | 笔记本字形兜底（与它的结果行图标一致） |
+
+### 新踩的坑
+
+- **发布又被运行中的实例锁住（MSB3027）**——第 15/16 轮记过、第 17 轮的"单实例静默退出"
+  是它的孪生，本轮第 3 次踩到。**发布/自检前的固定动作：`Get-Process UniSearch` 先杀。**
+- Controls.xaml 里的模板**不能引用 MainWindow.xaml 的本地资源**（InverseBoolToVis）——
+  StaticResource 在字典加载时解析，模板得用 DataTrigger 自足。
+
+### 验证手段变化
+
+- `--dump-render out/b4-source-icons.png`：左栏四个后端图标逐个核对（见上表）。
+- 跳转的 .lnk 分支没做人工点按（与第 17 轮 copylink 同一待验项）。
+
+---
+
 ```markdown
 ## YYYY-MM-DD 第 N 轮（目标 goal-xxxx）
 

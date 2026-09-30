@@ -68,6 +68,8 @@ public sealed class AnytxtProvider : ISearchProvider, IGlobalScopeProvider, IFil
             ProviderCapability.SearchesFileContent | ProviderCapability.SupportsKindFilter |
             ProviderCapability.SupportsDirectoryScope | ProviderCapability.SupportsGlobalScope |
             ProviderCapability.ProvidesActions,
+        // B4：左栏真图标（见 ProviderIcon 注释 —— 线索而非写死路径）
+        Icon = new ProviderIcon("Anytxt", "ATGUI.exe", "\uE721", AnytxtLocator.FindExecutable()),
     };
 
     public ValueTask InitializeAsync(IProviderRuntime runtime, CancellationToken ct)
@@ -465,7 +467,12 @@ public sealed class AnytxtProvider : ISearchProvider, IGlobalScopeProvider, IFil
 
     public string ExternalUiName => "AnyTXT";
 
-    public bool CanOpenExternalUi => AnytxtLocator.FindExecutable() is not null;
+    /// <summary>跳转入口 = exe，退而求其次开始菜单 .lnk / App Paths。</summary>
+    string? ResolveLaunchTarget() => AnytxtLocator.FindExecutable()
+        ?? ShellAppLocator.FindStartMenuShortcut("Anytxt")
+        ?? ShellAppLocator.FindViaAppPaths("ATGUI.exe");
+
+    public bool CanOpenExternalUi => ResolveLaunchTarget() is not null;
 
     /// <summary>
     /// 把当前查询带到 AnyTXT 自己的窗口。
@@ -474,13 +481,16 @@ public sealed class AnytxtProvider : ISearchProvider, IGlobalScopeProvider, IFil
     /// 实例把标题变成 <c>&lt;关键词&gt; - Anytxt Searcher …</c>，即真的执行了搜索，且复用同一进程。
     /// 完整开关见 <c>docs/research/ANYTXT-RPC-VERIFIED.md</c> §2。
     /// </para>
+    /// <para>
+    /// exe 找不到时退到开始菜单快捷方式 / App Paths —— ShellExecute 对 .lnk 解引用目标并转交参数。
+    /// </para>
     /// </summary>
     public bool OpenExternalUi(string query)
     {
-        var exe = AnytxtLocator.FindExecutable();
+        var exe = ResolveLaunchTarget();
         if (exe is null)
         {
-            _runtime?.Log.Warn(ProviderId, "找不到 ATGUI.exe，无法跳转到它的界面");
+            _runtime?.Log.Warn(ProviderId, "找不到 AnyTXT 的入口（exe / 快捷方式 / App Paths 都没有），无法跳转");
             return false;
         }
 

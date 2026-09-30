@@ -74,6 +74,8 @@ public sealed class ZoteroProvider : ISearchProvider, IGlobalScopeProvider, IAct
             ProviderCapability.ReturnsAttachments |
             ProviderCapability.SearchesMetadata | ProviderCapability.SearchesFileContent |
             ProviderCapability.SupportsGlobalScope | ProviderCapability.ProvidesActions,
+        // B4：左栏真图标（见 ProviderIcon 注释 —— 线索而非写死路径）
+        Icon = new ProviderIcon("Zotero", "zotero.exe", "", ZoteroLocator.FindExecutable()),
     };
 
     public ValueTask InitializeAsync(IProviderRuntime runtime, CancellationToken ct)
@@ -241,7 +243,12 @@ public sealed class ZoteroProvider : ISearchProvider, IGlobalScopeProvider, IAct
 
     public string ExternalUiName => "Zotero";
 
-    public bool CanOpenExternalUi => ZoteroLocator.FindExecutable() is not null;
+    /// <summary>跳转入口 = exe，退而求其次开始菜单 .lnk / App Paths。</summary>
+    string? ResolveLaunchTarget() => ZoteroLocator.FindExecutable()
+        ?? ShellAppLocator.FindStartMenuShortcut("Zotero")
+        ?? ShellAppLocator.FindViaAppPaths("zotero.exe");
+
+    public bool CanOpenExternalUi => ResolveLaunchTarget() is not null;
 
     /// <summary>
     /// 把 Zotero 带到前台。
@@ -254,10 +261,11 @@ public sealed class ZoteroProvider : ISearchProvider, IGlobalScopeProvider, IAct
     /// </summary>
     public bool OpenExternalUi(string query)
     {
-        var exe = ZoteroLocator.FindExecutable();
+        // exe 找不到时退到开始菜单快捷方式 / App Paths（ShellExecute 对 .lnk 解引用目标）
+        var exe = ResolveLaunchTarget();
         if (exe is null)
         {
-            _runtime?.Log.Warn(ProviderId, "找不到 zotero.exe，无法跳转到它的界面");
+            _runtime?.Log.Warn(ProviderId, "找不到 Zotero 的入口（exe / 快捷方式 / App Paths 都没有），无法跳转");
             return false;
         }
 

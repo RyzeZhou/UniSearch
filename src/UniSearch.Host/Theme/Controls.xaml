@@ -269,9 +269,24 @@
                 </ControlTemplate>
             </Button.Template>
             <StackPanel HorizontalAlignment="Center">
-                <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource Glyph.Font}" FontSize="16"
-                           HorizontalAlignment="Center"
-                           Foreground="{StaticResource Brush.Text.Secondary}"/>
+                <!-- B4：有真图标显示软件图标，否则退到字形兜底（HasIcon 触发器切换） -->
+                <Grid Height="18">
+                    <Image Source="{Binding Icon}" Width="16" Height="16" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource Glyph.Font}" FontSize="16"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{StaticResource Brush.Text.Secondary}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasIcon}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
                 <TextBlock Text="{Binding CompactCount}" FontSize="{StaticResource Font.Size.Chip}"
                            HorizontalAlignment="Center" Margin="0,1,0,0"
                            Foreground="{StaticResource Brush.Text.Tertiary}"/>
@@ -309,9 +324,24 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="{Binding Glyph}" FontFamily="{StaticResource Glyph.Font}"
-                           FontSize="12" VerticalAlignment="Center"
-                           Foreground="{StaticResource Brush.Text.Secondary}"/>
+                <Grid Grid.Column="0" VerticalAlignment="Center" Width="20" Height="16">
+                    <!-- B4：有真图标显示软件图标，否则退到字形兜底（HasIcon 触发器切换） -->
+                    <Image Source="{Binding Icon}" Width="16" Height="16" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource Glyph.Font}"
+                               FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Center"
+                               Foreground="{StaticResource Brush.Text.Secondary}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasIcon}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
                 <StackPanel Grid.Column="1" Margin="4,0,0,0" VerticalAlignment="Center">
                     <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
                                Foreground="{StaticResource Brush.Text.Primary}"
