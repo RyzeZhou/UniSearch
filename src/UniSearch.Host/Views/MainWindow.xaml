@@ -1,3 +1,7 @@
+<!-- ⚠ 不要给下面的 Window 加 TextOptions.TextFormattingMode="Display"：
+     它按 GDI 兼容方式做像素对齐，在分数 DPI 缩放 + 用户替换字体（"新微软雅黑"）的机器上
+     笔画发虚（"墨水不够"）—— AWD 项目 2026-10-04 定案的真因（速同步没设它所以同机清晰）。
+     WPF 默认就是 Ideal，什么都不写才是对的。同类教训见记忆库 GEN-2026-10-04-01。 -->
 <Window x:Class="UniSearch.Host.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -10,7 +14,6 @@
         FontFamily="{StaticResource Font.Text}"
         AllowDrop="True"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
-         TextOptions.TextFormattingMode="Display"
         PreviewKeyDown="OnWindowPreviewKeyDown"
         Activated="OnWindowActivated"
         Closing="OnWindowClosing">
